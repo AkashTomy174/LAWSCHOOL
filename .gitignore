@@ -1,0 +1,130 @@
+# ---------------------------------------------------------------------------
+# LawSchool — files that must never be committed.
+#
+# The single most important rule in this file is the `.env` block: this repo
+# holds Razorpay secrets, Cloudflare API tokens and the JWT signing key.  A
+# committed `.env` is a credential leak, not just a code smell.
+# ---------------------------------------------------------------------------
+
+# --- Secrets / environment -------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# Anything that looks like a key material file.
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Packaging / build
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Test / lint caches
+.pytest_cache/
+.pytest_cache/v/cache/lastfailed
+.pytest_cache/v/cache/nodeids
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+
+# --- Django -----------------------------------------------------------------
+# Local SQLite databases (dev only).
+db.sqlite3
+db.sqlite3-journal
+dev.sqlite3
+dev.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
+
+# Collected static files and local media uploads.
+/backend/staticfiles/
+/backend/media/
+/backend/templates/
+
+# Localisation
+*.mo
+*.pot
+
+# --- Celery / Redis ---------------------------------------------------------
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+dump.rdb
+
+# --- Node / frontend --------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# --- Logs / runtime ---------------------------------------------------------
+logs/
+*.log
+!docs/**/*.log
+server.out.log
+server.err.log
+server*.out.log
+server*.err.log
+vite.out.log
+vite.err.log
+
+# --- Editors / OS -----------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Docker / infra ---------------------------------------------------------
+pgdata/
+redisdata/
+*.tfstate
+*.tfstate.*

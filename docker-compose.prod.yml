@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# LawSchool -- production overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Differences from the development stack:
+#   * production Dockerfiles (multi-stage, non-root, gunicorn / Nginx)
+#   * DEBUG=False and the production settings module
+#   * no source bind-mounts and no published database/Redis ports
+#   * celery worker and beat split into separate services
+#
+# Migrations are NOT run automatically: every replica would race.  Run them once
+# as a release step (see docs/deployment.md).
+# ---------------------------------------------------------------------------
+
+services:
+  postgres:
+    # Not published to the host: only reachable on the internal network.
+    ports: []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment}
+
+  redis:
+    ports: []
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 4
+      --threads 2
+      --timeout 60
+      --access-logfile -
+      --error-logfile -
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      # Bcrypt is materially slower to brute-force than the development default.
+      # (Local dev and tests use a fast hasher for speed.)
+      LOG_JSON: "True"
+      CELERY_TASK_ALWAYS_EAGER: "False"
+    volumes:
+      # No source bind-mount; the image is immutable.  Media only.
+      - media_data:/app/media
+    restart: always
+
+  # The worker scales horizontally: `docker compose up -d --scale celery=4`.
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command:
+      ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "4"]
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      LOG_JSON: "True"
+    volumes: []
+    restart: always
+
+  # Exactly ONE beat instance may run.  `--scale celery-beat=2` would cause
+  # duplicate periodic jobs, so it must never be scaled.
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      celery -A config beat -l info
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "False"
+      LOG_JSON: "True"
+    volumes: []
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Public values only: VITE_* is embedded in the client bundle.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+        VITE_CLOUDFLARE_CUSTOMER_CODE: ${CLOUDFLARE_STREAM_CUSTOMER_CODE:-}
+    environment: {}
+    volumes: []
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    restart: always

@@ -1,0 +1,195 @@
+# ---------------------------------------------------------------------------
+# LawSchool CI.
+#
+# Two independent jobs so a frontend failure does not mask a backend failure (and
+# vice versa).  Every job runs the same commands a developer runs locally, so a
+# green build here means a green build on a workstation.
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  # =========================================================================
+  backend:
+    name: Backend (Django + pytest)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      # Verifies the suite against the real production database engine, not just
+      # SQLite -- catches SQL that works in one and not the other.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lawschool
+          POSTGRES_PASSWORD: lawschool
+          POSTGRES_DB: lawschool_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lawschool"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Tests default to in-memory SQLite for speed; this override means the suite
+      # also exercises PostgreSQL.
+      DATABASE_URL: postgres://lawschool:lawschool@localhost:5432/lawschool_test
+      REDIS_URL: redis://localhost:6379/0
+      CACHE_BACKEND: redis
+      SECRET_KEY: ci-secret-key-not-used-in-production
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      # Deterministic fakes so signature tests are reproducible.  Real secrets are
+      # supplied by the platform at deploy time, never committed.
+      RAZORPAY_KEY_ID: rzp_test_ci
+      RAZORPAY_KEY_SECRET: ci_razorpay_secret
+      RAZORPAY_WEBHOOK_SECRET: ci_webhook_secret
+      CLOUDFLARE_ACCOUNT_ID: ci-account
+      CLOUDFLARE_API_TOKEN: ci-token
+      CLOUDFLARE_STREAM_SIGNING_KEY: ci-key-id:ci-signing-secret
+      CLOUDFLARE_STREAM_CUSTOMER_CODE: ci-customer
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements/*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/development.txt
+
+      - name: Check for missing migrations
+        # Fails the build if a model change was made without its migration.
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Django system checks
+        run: python manage.py check
+
+      - name: Run test suite
+        run: python -m pytest -q --cov=apps --cov-report=term-missing --cov-report=xml
+
+      - name: Generate OpenAPI schema
+        # A hard failure here means the schema is *unusable* (an import error or a
+        # broken request/response class), which is a real regression.
+        #
+        # Note: `--validate` exits 0 even with doc-quality warnings (views whose
+        # get_queryset() branches on request.user.role resolve to AnonymousUser
+        # during schema generation). Those endpoints still work at runtime; the
+        # generated docs are simply thinner for them. Making this a pass/fail gate
+        # on --validate would be false confidence, so we gate on the schema being
+        # produced and non-trivial instead, and print the warning count for review.
+        run: |
+          python manage.py spectacular --file /tmp/schema.yml --validate 2>&1 | tee /tmp/schema.log
+          PROBLEMS=$(grep -cE '^\S+: (Error|Warning)' /tmp/schema.log || true)
+          echo "Schema generation reported ${PROBLEMS} resolvable-by-annotation issue(s)."
+          test -s /tmp/schema.yml || { echo "::error::OpenAPI schema was not generated."; exit 1; }
+          PATHS=$(grep -c '^  /' /tmp/schema.yml || true)
+          echo "Schema contains ${PATHS} documented paths."
+          test "${PATHS}" -ge 20 || { echo "::error::Suspiciously few documented paths (${PATHS})."; exit 1; }
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  # =========================================================================
+  frontend:
+    name: Frontend (React + Vitest)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Production build
+        # The build is part of CI: an import error that only appears at build time
+        # should fail a pull request, not a deploy.
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  # =========================================================================
+  security:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so the scan covers every commit, not just the tip.
+          fetch-depth: 0
+
+      - name: Verify no .env file is tracked
+        # The single most costly mistake this repo can make is committing a
+        # Razorpay/Cloudflare/JWT secret.  Fail loudly and early.
+        run: |
+          if git ls-files --error-unmatch .env backend/.env frontend/.env 2>/dev/null; then
+            echo "::error::A .env file is tracked by git. Remove it and rotate every secret it contained."
+            exit 1
+          fi
+          echo "No .env files tracked. OK."
+
+      - name: Fail on obvious hard-coded secrets
+        run: |
+          if grep -rInE "(RAZORPAY_KEY_SECRET|RAZORPAY_WEBHOOK_SECRET|CLOUDFLARE_API_TOKEN|CLOUDFLARE_STREAM_SIGNING_KEY)\s*=\s*[\"'][A-Za-z0-9_-]{16,}" \
+              --include='*.py' --include='*.js' --include='*.jsx' --include='*.yml' --include='*.yaml' \
+              backend/config backend/apps frontend/src 2>/dev/null; then
+            echo "::error::A credential-looking literal was found in source. Move it to the environment."
+            exit 1
+          fi
+          echo "No hard-coded credentials detected. OK."

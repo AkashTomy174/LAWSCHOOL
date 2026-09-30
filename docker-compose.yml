@@ -1,0 +1,185 @@
+# ---------------------------------------------------------------------------
+# LawSchool -- local/production-like stack.
+#
+#   postgres · redis · backend · celery · celery-beat · frontend
+#
+# Default profile is DEVELOPMENT (Dockerfile.dev + runserver + Vite HMR).
+# For the production-shaped stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+#
+# Secrets are read from backend/.env (git-ignored).  Nothing sensitive is
+# hard-coded here -- the inline values below are development defaults only.
+# ---------------------------------------------------------------------------
+
+name: lawschool
+
+services:
+  # ------------------------------------------------------------------ postgres
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lawschool}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lawschool}
+      POSTGRES_DB: ${POSTGRES_DB:-lawschool}
+      # Faster, safer defaults for a container-local instance.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Exposed for local tooling (psql, dbshell).  Remove this in production.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # The backend must not start before Postgres accepts connections.
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-lawschool} -d ${POSTGRES_DB:-lawschool}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [lawschool]
+
+  # --------------------------------------------------------------------- redis
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Append-only persistence: the cache is disposable, but the Celery broker and
+    # beat schedule benefit from surviving a restart.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [lawschool]
+
+  # ------------------------------------------------------------------- backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # These override .env so the containers talk to each other by service name
+      # rather than localhost.
+      DATABASE_URL: postgres://${POSTGRES_USER:-lawschool}:${POSTGRES_PASSWORD:-lawschool}@postgres:5432/${POSTGRES_DB:-lawschool}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.development}
+      # Background work happens in the celery service, not inline here.
+      CELERY_TASK_ALWAYS_EAGER: "False"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Bind-mount the source for autoreload.  Remove for a production build.
+      - ./backend:/app
+      - media_data:/app/media
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [lawschool]
+
+  # -------------------------------------------------------------------- celery
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    # The entrypoint waits for the DB/Redis via depends_on, then runs worker +
+    # beat in ONE container.  They are split in docker-compose.prod.yml because a
+    # single scheduler instance across replicas is a correctness requirement.
+    command: >
+      sh -c "celery -A config worker -l info --concurrency 4"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-lawschool}:${POSTGRES_PASSWORD:-lawschool}@postgres:5432/${POSTGRES_DB:-lawschool}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.development}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [lawschool]
+
+  # --------------------------------------------------------------- celery-beat
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    command: >
+      sh -c "celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-lawschool}:${POSTGRES_PASSWORD:-lawschool}@postgres:5432/${POSTGRES_DB:-lawschool}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.development}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [lawschool]
+
+  # ------------------------------------------------------------------ frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    environment:
+      # Vite proxies /api here, so the browser stays same-origin.
+      VITE_PROXY_TARGET: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      # Keep the container's node_modules; a host bind-mount would shadow them
+      # with a possibly-incompatible local install.
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [lawschool]
+
+networks:
+  lawschool:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:

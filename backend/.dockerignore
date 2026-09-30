@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# Build context exclusions for the backend image.
+#
+# Keeps the context small (faster builds, less cache invalidation) and -- more
+# importantly -- guarantees secrets and local state never enter a layer.
+# ---------------------------------------------------------------------------
+
+# Secrets: must never be baked into an image.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Local state
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+media/
+staticfiles/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Test / lint caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# VCS / editors / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs / scratch
+*.log
+server.out.log
+server.err.log
