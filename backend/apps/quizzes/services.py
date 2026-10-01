@@ -13,6 +13,7 @@ Attempt flow::
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -33,6 +34,9 @@ from apps.quizzes.models import (
 from apps.subscriptions.services import can_user_access_course
 
 logger = get_logger(__name__)
+
+# Slack for request latency / clock drift when enforcing a quiz's time limit.
+_TIME_GRACE = timedelta(seconds=30)
 
 
 def _locked_course_message(course, decision) -> dict:
@@ -256,6 +260,18 @@ def submit_attempt(
     quiz = attempt.quiz
     # Re-check entitlement at submission time: a subscription can lapse mid-quiz.
     can_attempt_quiz(attempt.user, quiz)
+
+    # A timed quiz is closed once its limit (plus a short network grace period) has
+    # passed.  Late answers are discarded rather than rejected, so the attempt
+    # still closes (and counts) instead of staying open for ever.
+    if quiz.time_limit_minutes:
+        allowed = timedelta(minutes=quiz.time_limit_minutes) + _TIME_GRACE
+        if timezone.now() - attempt.started_at > allowed:
+            logger.warning(
+                "Late quiz submission: answers discarded",
+                extra={"attempt_id": str(attempt.pk)},
+            )
+            answers = {}
 
     if len(answers) > attempt.attempt_questions.count():
         raise DomainError(

@@ -522,3 +522,38 @@ class TestQueryEfficiency:
         # 1 course + 1 sections + 1 lessons + 1 quizzes + auth, regardless of how
         # many lessons the course has.
         assert len(captured) <= 10, f"possible N+1: {len(captured)} queries"
+
+
+class TestCourseOwnership:
+    """Authorization matrix for course updates (role alone is not enough)."""
+
+    @pytest.fixture
+    def other_instructor(self, db):
+        from apps.users.models import User
+
+        return User.objects.create_user(
+            email="rival-instructor@test.local",
+            password="InstructorPass123!",
+            name="Rival",
+            role="instructor",
+        )
+
+    def _patch(self, client, course):
+        return client.patch(
+            f"/api/v1/courses/{course.slug}/", {"title": "Changed"}, format="json"
+        )
+
+    def test_owner_can_update(self, jwt_client, instructor, course):
+        assert self._patch(jwt_client(instructor), course).status_code == 200
+
+    def test_other_instructor_cannot_update(self, jwt_client, other_instructor, course):
+        response = self._patch(jwt_client(other_instructor), course)
+        assert response.status_code == 403
+        course.refresh_from_db()
+        assert course.title != "Changed"
+
+    def test_admin_can_update_any_course(self, jwt_client, admin_user, course):
+        assert self._patch(jwt_client(admin_user), course).status_code == 200
+
+    def test_student_cannot_update(self, jwt_client, student, course):
+        assert self._patch(jwt_client(student), course).status_code == 403

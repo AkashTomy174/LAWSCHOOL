@@ -58,6 +58,7 @@ class VideoAdminSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = (
+            "require_signed_urls",
             "id",
             "playback_uid",
             "thumbnail_url",
@@ -81,7 +82,6 @@ class RegisterVideoSerializer(serializers.Serializer):
     cloudflare_video_id = serializers.CharField(max_length=64)
     description = serializers.CharField(required=False, allow_blank=True, default="")
     lesson = serializers.UUIDField(required=False, allow_null=True)
-    require_signed_urls = serializers.BooleanField(default=True)
 
     def validate_cloudflare_video_id(self, value: str) -> str:
         cleaned = value.strip()

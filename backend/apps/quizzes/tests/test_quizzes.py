@@ -744,3 +744,52 @@ class TestSampling:
         second_ids = set(second.attempt_questions.values_list("question_id", flat=True))
         assert len(second_ids) == 2
         assert second_ids == {q.id for q in questions}
+
+
+class TestAuditRegressions:
+    def test_instructor_cannot_read_attempt_in_foreign_course(
+        self, jwt_client, student, quiz, active_subscription
+    ):
+        from apps.users.models import User
+
+        stranger = User.objects.create_user(
+            email="stranger-instructor@test.local",
+            password="InstructorPass123!",
+            name="Stranger",
+            role="instructor",
+        )
+        attempt = start_attempt(user=student, quiz=quiz)
+        submit_attempt(attempt=attempt, answers={})
+        response = jwt_client(stranger).get(f"/api/v1/quiz-attempts/{attempt.id}/")
+        assert response.status_code == 403
+
+    def test_course_owner_can_read_attempt(
+        self, jwt_client, student, instructor, quiz, active_subscription
+    ):
+        attempt = start_attempt(user=student, quiz=quiz)
+        submit_attempt(attempt=attempt, answers={})
+        response = jwt_client(instructor).get(f"/api/v1/quiz-attempts/{attempt.id}/")
+        assert response.status_code == 200
+
+    def test_late_submission_discards_answers(
+        self, student, rich_quiz, active_subscription
+    ):
+        from datetime import timedelta
+
+        rich_quiz.time_limit_minutes = 10
+        rich_quiz.save()
+        attempt = start_attempt(user=student, quiz=rich_quiz)
+        QuizAttempt.objects.filter(pk=attempt.pk).update(
+            started_at=timezone.now() - timedelta(minutes=20)
+        )
+        attempt.refresh_from_db()
+        result = submit_attempt(attempt=attempt, answers=answer_map(attempt, correct=True))
+        assert result.score == 0
+        assert result.submitted_at is not None
+
+    def test_on_time_submission_is_graded(self, student, rich_quiz, active_subscription):
+        rich_quiz.time_limit_minutes = 10
+        rich_quiz.save()
+        attempt = start_attempt(user=student, quiz=rich_quiz)
+        result = submit_attempt(attempt=attempt, answers=answer_map(attempt, correct=True))
+        assert result.score == 6

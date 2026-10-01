@@ -129,8 +129,10 @@ constraints = [
 ```
 
 `record_webhook_event()` returns `(event, created)`. `created=False` means the
-delivery is a duplicate and the caller returns `{"status": "duplicate"}` without
-touching any state.
+delivery has been seen before. It is only a no-op when the stored event is already
+`processed`; if an earlier attempt crashed (we answered 500), the redelivery re-runs
+the idempotent handler. Signatures are verified *before* anything is stored, so an
+unsigned request can neither write rows nor claim a genuine event id.
 
 The insert runs inside its own savepoint, so when the constraint fires only that
 savepoint rolls back and the surrounding transaction stays usable for the
@@ -161,9 +163,8 @@ out in the view's docstring so nobody "cleans it up" later.
 | Event                                 | Handler behaviour                                                   |
 | ------------------------------------- | ------------------------------------------------------------------- |
 | `payment.captured`                    | settle: mark captured, activate subscription                        |
-| `payment.authorized`                  | same path (authorised is treated as settled for our flow)           |
 | `payment.failed`                      | record the decline; if the payment is already captured, ignore      |
-| `refund.created` / `refund.processed` | mark `REFUNDED`, cancel the subscription and end access immediately |
+| `refund.processed`                    | full refund: mark `REFUNDED`, cancel subscription, end access; partial refund: record the refund id only |
 | `subscription.charged`                | routed to the same activation path, so a renewal _extends_ the term |
 
 ### Amount cross-check
@@ -182,10 +183,10 @@ logged at ERROR rather than activating anything.
 | Situation          | Response                      | Why                                                                                       |
 | ------------------ | ----------------------------- | ----------------------------------------------------------------------------------------- |
 | Processed          | `200 {"status": "processed"}` | done                                                                                      |
-| Duplicate delivery | `200 {"status": "duplicate"}` | **not** an error — an error would make Razorpay keep retrying                             |
+| Duplicate delivery | `200 {"status": "duplicate"}` | already processed; **not** an error — an error would make Razorpay keep retrying           |
 | Unknown event type | `200 {"status": "ignored"}`   | acknowledged so retries stop                                                              |
-| Bad signature      | `400 invalid_signature`       | logged at ERROR                                                                           |
-| Handler crashed    | `500 webhook_failed`          | deliberately non-2xx so Razorpay retries; the stored event row prevents double-processing |
+| Bad signature      | `400 invalid_signature`       | logged at ERROR; nothing is persisted                                                     |
+| Handler crashed    | `500 webhook_failed`          | deliberately non-2xx so Razorpay retries; the redelivery re-runs the idempotent handler    |
 
 ## 6. Failure handling
 

@@ -49,6 +49,11 @@ SECRET_KEY = env("SECRET_KEY", "insecure-development-key-change-me")
 DEBUG = env_bool("DEBUG", False)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 
+# Number of trusted reverse proxies in front of the app.  DRF throttling and audit
+# logging use it to pick the client address out of X-Forwarded-For; with 0 the
+# header is ignored entirely, so it cannot be used to dodge rate limits.
+NUM_PROXIES = int(env("NUM_PROXIES", "0"))
+
 # Application definition
 INSTALLED_APPS = [
     # Django
@@ -181,6 +186,7 @@ STORAGES = {
 # DRF
 # --------------------------------------------------------------------------- #
 REST_FRAMEWORK = {
+    "NUM_PROXIES": NUM_PROXIES,
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
@@ -342,6 +348,8 @@ RAZORPAY_WEBHOOK_SECRET = env("RAZORPAY_WEBHOOK_SECRET", "")
 
 CLOUDFLARE_ACCOUNT_ID = env("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = env("CLOUDFLARE_API_TOKEN", "")
+# Signing key from `POST /stream/keys`: the key `id`, and its base64 `pem` (RSA, RS256).
+CLOUDFLARE_STREAM_KEY_ID = env("CLOUDFLARE_STREAM_KEY_ID", "")
 CLOUDFLARE_STREAM_SIGNING_KEY = env("CLOUDFLARE_STREAM_SIGNING_KEY", "")
 CLOUDFLARE_STREAM_CUSTOMER_CODE = env("CLOUDFLARE_STREAM_CUSTOMER_CODE", "")
 # Signed playback tokens are intentionally very short lived.

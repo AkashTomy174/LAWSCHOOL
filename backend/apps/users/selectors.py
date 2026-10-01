@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
 from apps.users.models import User
 
@@ -21,9 +21,9 @@ def user_list(
     if is_active is not None:
         queryset = queryset.filter(is_active=is_active)
     if search:
-        queryset = queryset.filter(email__icontains=search) | User.objects.filter(
-            name__icontains=search
-        )
+        # Q-combine on the *same* queryset; OR-ing two querysets would drop the
+        # role/is_active filters applied above.
+        queryset = queryset.filter(Q(email__icontains=search) | Q(name__icontains=search))
     return queryset.order_by("-date_joined")
 
 
