@@ -53,6 +53,11 @@ CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to send X-CSRFToken
 
 X_FRAME_OPTIONS = "DENY"
 
+# One proxy hop (the nginx container) by default; raise it if a CDN/LB sits in
+# front as well.  Never leave it at 0 behind a proxy, or every client shares an IP.
+NUM_PROXIES = int(env("NUM_PROXIES", "1"))
+REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": NUM_PROXIES}  # noqa: F405
+
 # --------------------------------------------------------------------------- #
 # Servers / hosts
 # --------------------------------------------------------------------------- #

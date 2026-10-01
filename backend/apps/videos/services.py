@@ -34,6 +34,7 @@ from apps.core.exceptions import (
     VideoNotReadyError,
 )
 from apps.core.logging import get_logger
+from apps.core.network import client_ip
 from apps.subscriptions.services import can_user_access_video
 from apps.videos.cloudflare import CloudflareStreamError, client, parse_playback_urls
 from apps.videos.models import PlaybackSession, Video, VideoProgress
@@ -178,7 +179,7 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
 
     ip_address = user_agent = None
     if request is not None:
-        ip_address = _client_ip(request)
+        ip_address = client_ip(request)
         user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:300]
 
     PlaybackSession.objects.create(
@@ -211,14 +212,6 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
         "token_expires_at": expires_at,
         "expires_in": settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL,
     }
-
-
-def _client_ip(request) -> str | None:
-    """Resolve the client IP, honouring a single trusted proxy hop."""
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
 
 
 def update_video_progress(
@@ -309,9 +302,8 @@ def invalidate_video_cache(video: Video) -> None:  # pragma: no cover - hook poi
 def sync_video_metadata(video: Video) -> Video:
     """Pull status/duration/thumbnail from Cloudflare.
 
-    Called by the ``video_process_callback`` webhook and by a periodic
-    reconciliation task, so an asset that finished encoding while the webhook was
-    missed still flips to READY.
+    Called by the manual sync endpoint and by a periodic task; nothing pushes
+    status changes to us, so this is how an asset flips to READY.
     """
     try:
         payload = client.get_video(video.cloudflare_video_id)

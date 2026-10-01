@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
+from django.http import Http404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -12,10 +13,15 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.core.logging import get_logger
-from apps.core.permissions import IsInstructorOrAdmin, is_admin, is_schema_generation
+from apps.core.permissions import (
+    IsCourseOwnerOrAdmin,
+    IsInstructorOrAdmin,
+    is_admin,
+    is_schema_generation,
+)
 from apps.core.exceptions import EntitlementError
 from apps.courses.models import Lesson
-from apps.subscriptions.services import can_user_access_lesson
+from apps.subscriptions.services import can_user_access_lesson, can_user_access_video
 from apps.videos.models import Video, VideoProgress
 from apps.videos.serializers import (
     PlaybackRequestSerializer,
@@ -61,7 +67,12 @@ class VideoDetailView(generics.RetrieveAPIView):
     queryset = Video.objects.select_related("lesson")
 
     def get_object(self):
-        return get_object_or_404(self.get_queryset(), playback_uid=self.kwargs["uid"])
+        video = get_object_or_404(self.get_queryset(), playback_uid=self.kwargs["uid"])
+        # Same entitlement rule as playback; 404 (not 403) so the existence of
+        # unpublished or locked material is not disclosed.
+        if not can_user_access_video(self.request.user, video):
+            raise Http404
+        return video
 
 
 class VideoPlaybackView(APIView):
@@ -249,7 +260,9 @@ class VideoRegisterView(APIView):
     files never touch the Django server or database.
     """
 
-    permission_classes = [IsInstructorOrAdmin]
+    # IsCourseOwnerOrAdmin supplies the object-level ownership check that
+    # ``check_object_permissions`` below relies on (IsInstructorOrAdmin has none).
+    permission_classes = [IsCourseOwnerOrAdmin]
 
     @extend_schema(
         request=RegisterVideoSerializer, responses={201: VideoAdminSerializer}
@@ -320,6 +333,14 @@ class VideoSyncView(APIView):
     def post(self, request, uid):
         from apps.videos.services import sync_video_metadata
 
-        video = get_object_or_404(Video, playback_uid=uid)
+        video = get_object_or_404(
+            Video.objects.select_related("lesson__section__course"), playback_uid=uid
+        )
+        lesson = getattr(video, "lesson", None)
+        owns = lesson is not None and (
+            lesson.section.course.instructor_id == request.user.pk
+        )
+        if not (is_admin(request) or owns):
+            raise Http404
         video = sync_video_metadata(video)
         return Response(VideoAdminSerializer(video).data)

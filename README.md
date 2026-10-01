@@ -3,8 +3,8 @@
 A production-oriented LMS for legal education: subscription-gated courses, protected
 video streaming, quizzes with server-side scoring, progress tracking and leaderboards.
 
-> **Status:** Phases 1–8 implemented and green — **231 backend tests** and
-> **50 frontend tests** passing, frontend production build verified.
+> **Status:** Phases 1–8 implemented and green — **299 backend tests** and
+> **55 frontend tests** passing, frontend production build verified.
 
 ---
 

@@ -800,3 +800,130 @@ class TestPaymentHistoryEndpoints:
         response = jwt_client(admin_user).get("/api/v1/payments/all/")
         assert "provider_payload" not in json.dumps(response.data)
         assert "provider_signature" not in json.dumps(response.data)
+
+
+# --------------------------------------------------------------------------- #
+# Audit regressions
+# --------------------------------------------------------------------------- #
+def _signed_post(api_client, body, event_id, signature=None):
+    return api_client.post(
+        WEBHOOK_URL,
+        data=body,
+        content_type="application/json",
+        HTTP_X_RAZORPAY_SIGNATURE=signature or sign_webhook(body),
+        HTTP_X_RAZORPAY_EVENT_ID=event_id,
+    )
+
+
+class TestWebhookRobustness:
+    def test_failed_handler_is_retried_on_redelivery(self, api_client, student, plan):
+        from unittest import mock
+
+        payment = make_payment(student, plan, order_id="order_retry")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_retry", payment_id="pay_retry", amount_paise=plan.price_paise
+            )
+        ).encode()
+        with mock.patch(
+            "apps.payments.services._settle_payment", side_effect=RuntimeError("db")
+        ):
+            first = _signed_post(api_client, body, "evt_retry")
+        assert first.status_code == 500
+
+        second = _signed_post(api_client, body, "evt_retry")
+        assert second.status_code == 200
+        assert second.data["status"] == "processed"
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatus.CAPTURED
+
+    def test_unsigned_request_cannot_claim_event_id(self, api_client, student, plan):
+        payment = make_payment(student, plan, order_id="order_poison")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_poison", payment_id="pay_poison", amount_paise=plan.price_paise
+            )
+        ).encode()
+        bad = _signed_post(api_client, body, "evt_poison", signature="deadbeef")
+        assert bad.status_code == 400
+        assert not WebhookEvent.objects.filter(event_id="evt_poison").exists()
+
+        good = _signed_post(api_client, body, "evt_poison")
+        assert good.data["status"] == "processed"
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatus.CAPTURED
+
+    def test_partial_refund_keeps_subscription(self, api_client, student, plan):
+        payment = make_payment(student, plan, order_id="order_pref")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_pref", payment_id="pay_pref", amount_paise=plan.price_paise
+            )
+        ).encode()
+        _signed_post(api_client, body, "evt_pref_cap")
+
+        refund = json.dumps(
+            {
+                "event": "refund.processed",
+                "payload": {
+                    "refund": {
+                        "entity": {"id": "rfnd_1", "payment_id": "pay_pref", "amount": 100}
+                    }
+                },
+            }
+        ).encode()
+        _signed_post(api_client, refund, "evt_pref_refund")
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatus.CAPTURED
+        assert payment.provider_refund_id == "rfnd_1"
+        assert Subscription.objects.get(user=student).status == SubscriptionStatus.ACTIVE
+
+    def test_full_refund_cancels_subscription(self, api_client, student, plan):
+        payment = make_payment(student, plan, order_id="order_fref")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_fref", payment_id="pay_fref", amount_paise=plan.price_paise
+            )
+        ).encode()
+        _signed_post(api_client, body, "evt_fref_cap")
+        refund = json.dumps(
+            {
+                "event": "refund.processed",
+                "payload": {
+                    "refund": {
+                        "entity": {
+                            "id": "rfnd_2",
+                            "payment_id": "pay_fref",
+                            "amount": plan.price_paise,
+                        }
+                    }
+                },
+            }
+        ).encode()
+        _signed_post(api_client, refund, "evt_fref_refund")
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatus.REFUNDED
+        assert Subscription.objects.get(user=student).status == SubscriptionStatus.CANCELLED
+
+
+class TestReconciliation:
+    def test_missed_webhook_is_recovered_via_order_lookup(self, student, plan):
+        from unittest import mock
+
+        from apps.payments import services
+
+        payment = make_payment(student, plan, order_id="order_recon")
+        Payment.objects.filter(pk=payment.pk).update(
+            created_at=timezone.now() - timezone.timedelta(hours=2)
+        )
+        entity = {
+            "id": "pay_recon",
+            "order_id": "order_recon",
+            "amount": plan.price_paise,
+            "status": "captured",
+        }
+        with mock.patch.object(gateway, "fetch_order_payments", return_value=[entity]):
+            assert services.reconcile_stale_payments() == 1
+        payment.refresh_from_db()
+        assert payment.status == PaymentStatus.CAPTURED
+        assert Subscription.objects.filter(user=student).count() == 1

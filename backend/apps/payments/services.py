@@ -215,8 +215,17 @@ def _settle_payment(
     subscription (or the reverse) is exactly the inconsistency a user notices.
     """
     with transaction.atomic():
+        # Lock and re-read here (not in the caller): a checkout callback and a
+        # webhook can arrive together, and only the first may extend the term.
+        locked = (
+            Payment.objects.select_for_update()
+            .select_related("user", "plan")
+            .get(pk=payment.pk)
+        )
+        if locked.status == PaymentStatus.CAPTURED and locked.subscription_id:
+            return locked
         return _apply_settlement(
-            payment=payment, payment_id=payment_id, signature=signature
+            payment=locked, payment_id=payment_id, signature=signature
         )
 
 
@@ -337,31 +346,9 @@ def process_webhook(
     2. Record the event for idempotency.
     3. Apply the state change idempotently.
     """
-    signature_valid = gateway.verify_webhook_signature(
-        raw_body=raw_body, signature=signature
-    )
-    event, created = record_webhook_event(
-        event_id=event_id,
-        event_type=event_type,
-        payload=payload,
-        raw_body=raw_body,
-        signature_valid=signature_valid,
-    )
-
-    if not created:
-        logger.info(
-            "Duplicate webhook ignored",
-            extra={"event_id": event_id, "event_type": event_type},
-        )
-        return {
-            "status": "duplicate",
-            "event_id": event_id,
-            "processed": event.processed,
-        }
-
-    if not signature_valid:
-        event.processing_error = "Signature verification failed."
-        event.save(update_fields=["processing_error"])
+    # Verify *before* persisting anything: an unsigned request must neither write
+    # to the database nor claim an event id that Razorpay's genuine delivery needs.
+    if not gateway.verify_webhook_signature(raw_body=raw_body, signature=signature):
         logger.error(
             "Webhook signature verification failed", extra={"event_id": event_id}
         )
@@ -369,12 +356,31 @@ def process_webhook(
             {"detail": "Invalid webhook signature."}, code="invalid_signature"
         )
 
+    event, created = record_webhook_event(
+        event_id=event_id,
+        event_type=event_type,
+        payload=payload,
+        raw_body=raw_body,
+        signature_valid=True,
+    )
+
+    if not created and event.processed:
+        logger.info(
+            "Duplicate webhook ignored",
+            extra={"event_id": event_id, "event_type": event_type},
+        )
+        return {"status": "duplicate", "event_id": event_id, "processed": True}
+    # ``not created`` and unprocessed means an earlier attempt failed (we returned
+    # non-2xx so Razorpay is retrying): fall through and run the handler again.
+    # Handlers are idempotent, so a concurrent redelivery cannot double-apply.
+
     handler = _WEBHOOK_HANDLERS.get(event_type)
     if handler is None:
         # Unknown/unused events are acknowledged so Razorpay stops retrying.
         event.processed = True
         event.processed_at = timezone.now()
-        event.save(update_fields=["processed", "processed_at"])
+        event.processing_error = ""
+        event.save(update_fields=["processed", "processed_at", "processing_error"])
         return {"status": "ignored", "event_id": event_id, "event_type": event_type}
 
     try:
@@ -393,7 +399,8 @@ def process_webhook(
 
     event.processed = True
     event.processed_at = timezone.now()
-    event.save(update_fields=["processed", "processed_at"])
+    event.processing_error = ""
+    event.save(update_fields=["processed", "processed_at", "processing_error"])
     return {
         "status": "processed",
         "event_id": event_id,
@@ -448,15 +455,12 @@ def handle_payment_captured(payload: dict) -> dict:
         )
         return {"matched": True, "amount_mismatch": True}
 
-    with transaction.atomic():
-        locked = Payment.objects.select_for_update().get(pk=payment.pk)
-        if locked.status == PaymentStatus.CAPTURED:
-            return {"matched": True, "already_captured": True}
-        _settle_payment(
-            payment=locked,
-            payment_id=entity.get("id", locked.provider_payment_id),
-            signature="",
-        )
+    # _settle_payment locks the row and re-checks, so a concurrent capture wins once.
+    _settle_payment(
+        payment=payment,
+        payment_id=entity.get("id", payment.provider_payment_id),
+        signature="",
+    )
     return {"matched": True, "activated": True}
 
 
@@ -505,11 +509,18 @@ def handle_payment_failed(payload: dict) -> dict:
 
 
 def handle_payment_refunded(payload: dict) -> dict:
-    """``refund.processed`` -- mark refunded and end access immediately."""
+    """``refund.processed`` -- mark refunded and end access once fully refunded.
+
+    A partial refund is recorded (refund id) but leaves the payment captured and
+    the subscription running: the customer paid for the term and got only some of
+    the money back.
+    """
     refund_entity = ((payload.get("payload") or {}).get("refund") or {}).get(
         "entity"
     ) or {}
     payment_id = refund_entity.get("payment_id")
+    if not payment_id:
+        return {"matched": False}
     payment = (
         Payment.objects.select_related("user", "plan", "subscription")
         .filter(provider_payment_id=payment_id)
@@ -518,8 +529,13 @@ def handle_payment_refunded(payload: dict) -> dict:
     if payment is None:
         return {"matched": False}
 
-    payment.status = PaymentStatus.REFUNDED
     payment.provider_refund_id = refund_entity.get("id", "")
+    refund_amount = refund_entity.get("amount")
+    if refund_amount is not None and int(refund_amount) < payment.amount_paise:
+        payment.save(update_fields=["provider_refund_id", "updated_at"])
+        return {"matched": True, "partial_refund": True}
+
+    payment.status = PaymentStatus.REFUNDED
     payment.save(update_fields=["status", "provider_refund_id", "updated_at"])
 
     if (
@@ -545,10 +561,8 @@ def handle_subscription_charged(payload: dict) -> dict:
 
 _WEBHOOK_HANDLERS = {
     "payment.captured": handle_payment_captured,
-    "payment.authorized": handle_payment_captured,
     "payment.failed": handle_payment_failed,
     "refund.processed": handle_payment_refunded,
-    "refund.created": handle_payment_refunded,
     "subscription.charged": handle_subscription_charged,
 }
 
@@ -573,19 +587,13 @@ def reconcile_stale_payments(*, older_than_minutes: int = 30) -> int:
     resolved = 0
     for payment in stale.iterator():
         try:
-            entity = (
-                gateway.fetch_payment(payment.provider_payment_id)
-                if payment.provider_payment_id
-                else None
-            )
-            if entity is None:
-                continue
-            status = entity.get("status")
-            if status in {"captured", "authorized"}:
-                handle_payment_captured({"payload": {"payment": {"entity": entity}}})
-                resolved += 1
-            elif status == "failed":
-                handle_payment_failed({"payload": {"payment": {"entity": entity}}})
+            # A payment still in CREATED has no provider_payment_id (that is only
+            # learned from the callback/webhook we missed), so ask the gateway for
+            # the payments made against the *order*.
+            entities = gateway.fetch_order_payments(payment.provider_order_id)
+            captured = next((e for e in entities if e.get("status") == "captured"), None)
+            if captured is not None:
+                handle_payment_captured({"payload": {"payment": {"entity": captured}}})
                 resolved += 1
         except Exception:  # pragma: no cover - keep the batch going
             logger.exception(

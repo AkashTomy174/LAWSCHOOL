@@ -49,6 +49,11 @@ SECRET_KEY = env("SECRET_KEY", "insecure-development-key-change-me")
 DEBUG = env_bool("DEBUG", False)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 
+# Number of trusted reverse proxies in front of the app.  DRF throttling and audit
+# logging use it to pick the client address out of X-Forwarded-For; with 0 the
+# header is ignored entirely, so it cannot be used to dodge rate limits.
+NUM_PROXIES = int(env("NUM_PROXIES", "0"))
+
 # Application definition
 INSTALLED_APPS = [
     # Django
@@ -181,6 +186,7 @@ STORAGES = {
 # DRF
 # --------------------------------------------------------------------------- #
 REST_FRAMEWORK = {
+    "NUM_PROXIES": NUM_PROXIES,
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",

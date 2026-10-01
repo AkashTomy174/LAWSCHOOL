@@ -104,8 +104,8 @@ def reconcile_payments(older_than_minutes: int = 30) -> int:
 def sync_pending_videos(limit: int = 50) -> int:
     """Poll Cloudflare for assets stuck in PROCESSING/PENDING.
 
-    Cloudflare's ``video.processed`` webhook is the primary signal; this task is
-    the safety net for a dropped webhook so a lesson never stays unplayable.
+    There is no Cloudflare webhook receiver, so this task (plus the manual sync
+    endpoint) is how an asset flips to READY and a lesson becomes playable.
     """
     from apps.core.constants import VideoStatus
     from apps.videos.models import Video

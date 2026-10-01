@@ -588,3 +588,49 @@ class TestVideoAdminEndpoints:
         )
         assert response.status_code == 200
         assert "cloudflare_video_id" not in response.data
+
+
+# --------------------------------------------------------------------------- #
+# Audit regressions: ownership + metadata disclosure
+# --------------------------------------------------------------------------- #
+class TestVideoOwnership:
+    @pytest.fixture
+    def other_instructor(self, db):
+        from apps.users.models import User
+
+        return User.objects.create_user(
+            email="other-instructor@test.local",
+            password="InstructorPass123!",
+            name="Other Instructor",
+            role="instructor",
+        )
+
+    def test_instructor_cannot_attach_video_to_foreign_lesson(
+        self, jwt_client, other_instructor, lesson
+    ):
+        response = jwt_client(other_instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Hijack", "cloudflare_video_id": "cf-hijack", "lesson": str(lesson.id)},
+            format="json",
+        )
+        assert response.status_code == 403
+
+    def test_instructor_cannot_sync_foreign_video(
+        self, jwt_client, other_instructor, lesson
+    ):
+        response = jwt_client(other_instructor).post(
+            f"/api/v1/videos/{lesson.video.playback_uid}/sync/"
+        )
+        assert response.status_code == 404
+
+    def test_unentitled_student_cannot_read_video_metadata(
+        self, jwt_client, student, lesson
+    ):
+        response = jwt_client(student).get(f"/api/v1/videos/{lesson.video.playback_uid}/")
+        assert response.status_code == 404
+
+    def test_entitled_student_can_read_video_metadata(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        response = jwt_client(student).get(f"/api/v1/videos/{lesson.video.playback_uid}/")
+        assert response.status_code == 200
