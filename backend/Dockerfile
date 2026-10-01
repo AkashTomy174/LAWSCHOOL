@@ -67,7 +67,8 @@ RUN SECRET_KEY=build-only-not-a-real-secret \
     RAZORPAY_WEBHOOK_SECRET=build \
     CLOUDFLARE_ACCOUNT_ID=build \
     CLOUDFLARE_API_TOKEN=build \
-    CLOUDFLARE_STREAM_SIGNING_KEY=build:build \
+    CLOUDFLARE_STREAM_KEY_ID=build \
+    CLOUDFLARE_STREAM_SIGNING_KEY=build \
     python manage.py collectstatic --noinput
 
 # Writable directories for runtime artifacts.

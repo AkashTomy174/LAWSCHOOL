@@ -26,6 +26,7 @@ _integration_required = [
     "RAZORPAY_WEBHOOK_SECRET",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_STREAM_KEY_ID",
     "CLOUDFLARE_STREAM_SIGNING_KEY",
 ]
 _missing_integrations = [key for key in _integration_required if not env(key)]

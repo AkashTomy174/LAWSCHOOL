@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
-import json
 from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.conf import settings
@@ -51,8 +49,15 @@ _PROGRESS_UPDATE_BUDGET = 120
 _PROGRESS_UPDATE_WINDOW = 600
 
 
-def _b64url(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+def _load_private_key_pem(raw: str) -> str:
+    """Accept the key as Cloudflare returns it (base64 of the PEM) or as a PEM."""
+    raw = raw.strip()
+    if "BEGIN" in raw:
+        return raw.replace("\\n", "\n")
+    try:
+        return base64.b64decode(raw, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise CloudflareStreamError("Cloudflare Stream signing key is malformed.")
 
 
 def build_signed_playback_token(
@@ -60,51 +65,42 @@ def build_signed_playback_token(
 ) -> tuple[str, datetime]:
     """Mint a Cloudflare Stream signed playback JWT.
 
-    Returns ``(token, expires_at)``.  Implemented with the standard library so
-    the signing path has no third-party dependency to keep patched; the algorithm
-    is fixed by Cloudflare (HS256 over a JWT with ``kid`` = signing key id).
+    Returns ``(token, expires_at)``.  Cloudflare signing keys are RSA keys: the
+    ``POST /stream/keys`` API returns a key ``id`` and a base64 ``pem`` private
+    key, and tokens are **RS256** JWTs whose header ``kid`` is that id.  The
+    private key never leaves the server; Cloudflare verifies with its public half.
     """
-    ttl = ttl_seconds or settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL
-    signing_key = settings.CLOUDFLARE_STREAM_SIGNING_KEY
-    if not signing_key:
-        raise CloudflareStreamError("CLOUDFLARE_STREAM_SIGNING_KEY is not configured.")
+    import jwt
 
-    # Cloudflare issues signing keys as "<key_id>:<key_secret>"; the kid goes in
-    # the JWT header and the secret is used for the HMAC.
-    key_id, _, secret = signing_key.partition(":")
-    if not secret:
-        raise CloudflareStreamError("Cloudflare Stream signing key is malformed.")
+    ttl = ttl_seconds or settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL
+    key_id = settings.CLOUDFLARE_STREAM_KEY_ID
+    raw_key = settings.CLOUDFLARE_STREAM_SIGNING_KEY
+    if not key_id or not raw_key:
+        raise CloudflareStreamError(
+            "CLOUDFLARE_STREAM_KEY_ID / CLOUDFLARE_STREAM_SIGNING_KEY are not configured."
+        )
+    private_key = _load_private_key_pem(raw_key)
 
     now = datetime.now(tz=dt_timezone.utc)
     expires_at = now + timedelta(seconds=ttl)
-
-    header = {"alg": "HS256", "typ": "JWT", "kid": key_id}
     payload = {
         "sub": video_uid,
         "kid": key_id,
         "exp": int(expires_at.timestamp()),
         "nbf": int((now - timedelta(seconds=30)).timestamp()),
-        "iat": int(now.timestamp()),
-        # Least privilege: no downloads, no second-user sharing.
+        # Least privilege: no downloads.
         "downloadable": bool(downloadable),
     }
+    try:
+        token = jwt.encode(
+            payload, private_key, algorithm="RS256", headers={"kid": key_id}
+        )
+    except Exception as exc:  # bad PEM, wrong key type, missing crypto backend
+        raise CloudflareStreamError("Cloudflare Stream signing key is malformed.") from exc
 
-    signing_input = (
-        f"{_b64url(json.dumps(header, separators=(',', ':')).encode())}."
-        f"{_b64url(json.dumps(payload, separators=(',', ':')).encode())}"
-    )
-    signature = hmac.new(
-        secret.encode("utf-8"), signing_input.encode("utf-8"), hashlib.sha256
-    ).digest()
-
-    # ``expires_at`` is already tz-aware (it came from ``datetime.now(tz=utc)``),
-    # so it must be converted rather than re-aware'd -- ``django.utils.timezone
-    # .make_aware`` rejects a datetime that already carries tzinfo.
     from django.utils import timezone as django_timezone
 
-    return f"{signing_input}.{_b64url(signature)}", django_timezone.localtime(
-        expires_at
-    )
+    return token, django_timezone.localtime(expires_at)
 
 
 def _enforce_rate_limit(user, *, scope: str, budget: int, window: int) -> None:
@@ -286,7 +282,20 @@ def update_video_progress(
         # Completion requires either an explicit end-of-video signal or >=98%
         # actual playback -- the flag alone is not trusted when the percentage
         # contradicts it.
-        if (completed and percentage >= 95) or percentage >= 98:
+        #
+        # A first heartbeat can never complete a video: the first update is allowed
+        # to land anywhere (resume/seek), so without this a single request naming
+        # the final second would finish the lesson.  Completion also requires that
+        # a playback token was actually issued to this user for this video.
+        has_history = not is_first_update
+        was_issued_playback = PlaybackSession.objects.filter(
+            user=user, video=video
+        ).exists()
+        if (
+            has_history
+            and was_issued_playback
+            and ((completed and percentage >= 95) or percentage >= 98)
+        ):
             if not progress.completed:
                 progress.mark_completed()
         progress.update_count += 1
@@ -347,27 +356,44 @@ def register_video(
     title: str,
     cloudflare_video_id: str,
     description: str = "",
-    require_signed_urls: bool = True,
+    owner=None,
 ) -> Video:
     """Create the Django-side metadata row for an existing Stream asset.
 
     The instructor uploads directly to Cloudflare (``create_direct_upload``) and
     then registers the resulting UID here; Django never receives the file.
+
+    Signed URLs are always enforced -- paid content must never be reachable by its
+    bare video id.  A non-admin may only register an asset that *they* uploaded
+    (Cloudflare echoes back the ``creator`` we set at upload time), so one
+    instructor cannot claim another's asset by guessing its UID.
     """
+    from rest_framework.exceptions import PermissionDenied
+
+    if owner is not None and getattr(owner, "role", None) != "admin" and not (
+        owner.is_staff or owner.is_superuser
+    ):
+        try:
+            remote = client.get_video(cloudflare_video_id)
+        except CloudflareStreamError:
+            raise PermissionDenied("Could not verify ownership of this video.")
+        if str(remote.get("creator") or "") != str(owner.pk):
+            raise PermissionDenied("You can only register videos you uploaded.")
+
     video = Video.objects.create(
         title=title,
         description=description,
         cloudflare_video_id=cloudflare_video_id,
-        require_signed_urls=require_signed_urls,
+        require_signed_urls=True,
     )
-    if require_signed_urls:
-        try:
-            client.update_video(cloudflare_video_id, require_signed_urls=True)
-        except CloudflareStreamError:
-            # Non-fatal: the row exists and a reconciliation task can retry.  The
-            # playback endpoint stays closed until the asset is READY regardless.
-            logger.exception(
-                "Failed to mark Cloudflare asset as signed-only",
-                extra={"video_id": str(video.pk)},
-            )
+    try:
+        client.update_video(cloudflare_video_id, require_signed_urls=True)
+    except CloudflareStreamError:
+        # Non-fatal: the row exists and the sync task can retry.  The playback
+        # endpoint only ever hands out signed tokens and stays closed until the
+        # asset is READY regardless.
+        logger.exception(
+            "Failed to mark Cloudflare asset as signed-only",
+            extra={"video_id": str(video.pk)},
+        )
     return sync_video_metadata(video)

@@ -3,7 +3,7 @@
 A production-oriented LMS for legal education: subscription-gated courses, protected
 video streaming, quizzes with server-side scoring, progress tracking and leaderboards.
 
-> **Status:** Phases 1–8 implemented and green — **299 backend tests** and
+> **Status:** Phases 1–8 implemented and green — **314 backend tests** and
 > **55 frontend tests** passing, frontend production build verified.
 
 ---
@@ -244,7 +244,8 @@ RAZORPAY_WEBHOOK_SECRET=
 
 CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_STREAM_SIGNING_KEY=      # "<key_id>:<secret>"
+CLOUDFLARE_STREAM_KEY_ID=            # key id from POST /stream/keys
+CLOUDFLARE_STREAM_SIGNING_KEY=      # base64 PEM RSA private key (RS256)
 CLOUDFLARE_STREAM_CUSTOMER_CODE=
 CLOUDFLARE_PLAYBACK_TOKEN_TTL=300
 ```
@@ -413,7 +414,9 @@ activate a subscription twice or leave it stuck.
 2. **My Profile → API Tokens → Create Token** with the _Stream: Edit_ permission →
    `CLOUDFLARE_API_TOKEN`.
 3. **Stream → Settings → Signing Keys → Create** →
-   `CLOUDFLARE_STREAM_SIGNING_KEY` in the form `<key_id>:<secret>`.
+   `CLOUDFLARE_STREAM_KEY_ID` (the key `id`) and `CLOUDFLARE_STREAM_SIGNING_KEY` (the
+   base64 `pem` private key). Tokens are signed RS256; create the key through the
+   Stream API (`POST /accounts/<id>/stream/keys`), which returns both values.
 4. Copy the customer subdomain code (the `customer-<code>` part of playback URLs) →
    `CLOUDFLARE_STREAM_CUSTOMER_CODE`.
 5. Set `require_signed_urls` on each video; instructors typically upload straight

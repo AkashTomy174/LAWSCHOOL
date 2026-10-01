@@ -927,3 +927,45 @@ class TestReconciliation:
         payment.refresh_from_db()
         assert payment.status == PaymentStatus.CAPTURED
         assert Subscription.objects.filter(user=student).count() == 1
+
+
+class TestIdempotencyIsDatabaseEnforced:
+    def test_duplicate_key_for_same_user_and_plan_is_rejected_by_the_database(
+        self, student, plan
+    ):
+        from django.db import IntegrityError, transaction
+
+        make_payment(student, plan, order_id="order_idem_1", idempotency_key="k1")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            make_payment(student, plan, order_id="order_idem_2", idempotency_key="k1")
+
+    def test_blank_keys_are_not_constrained(self, student, plan):
+        make_payment(student, plan, order_id="order_blank_1")
+        make_payment(student, plan, order_id="order_blank_2")
+
+    def test_losing_a_race_returns_the_existing_order(self, student, plan, monkeypatch):
+        from apps.payments import services
+
+        winner = make_payment(
+            student, plan, order_id="order_win", idempotency_key="race-key"
+        )
+        # Simulate the lookup missing the winner (it committed a moment later).
+        monkeypatch.setattr(
+            gateway,
+            "create_order",
+            lambda **kw: {"id": "order_lose", "amount": plan.price_paise, "currency": "INR"},
+        )
+        real_filter = Payment.objects.filter
+        calls = {"n": 0}
+
+        def flaky_filter(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return Payment.objects.none()
+            return real_filter(*args, **kwargs)
+
+        monkeypatch.setattr(Payment.objects, "filter", flaky_filter)
+        result = services.create_plan_order(
+            user=student, plan=plan, idempotency_key="race-key"
+        )
+        assert result.pk == winner.pk

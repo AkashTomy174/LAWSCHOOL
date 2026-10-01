@@ -79,20 +79,29 @@ def create_plan_order(*, user, plan: Plan, idempotency_key: str = "") -> Payment
     )
 
     try:
-        payment = Payment.objects.create(
-            user=user,
-            plan=plan,
-            provider_order_id=order["id"],
-            amount=Decimal(order["amount"]) / 100,
-            currency=order.get("currency", plan.currency),
-            status=PaymentStatus.CREATED,
-            idempotency_key=idempotency_key,
-            notes={"plan_slug": plan.slug},
-            provider_payload={"order": order},
-        )
+        # Own savepoint: a constraint violation must not poison an outer transaction.
+        with transaction.atomic():
+            payment = Payment.objects.create(
+                user=user,
+                plan=plan,
+                provider_order_id=order["id"],
+                amount=Decimal(order["amount"]) / 100,
+                currency=order.get("currency", plan.currency),
+                status=PaymentStatus.CREATED,
+                idempotency_key=idempotency_key,
+                notes={"plan_slug": plan.slug},
+                provider_payload={"order": order},
+            )
     except IntegrityError:
-        # Extremely unlikely, but a retried request could race here.
-        payment = Payment.objects.get(provider_order_id=order["id"])
+        # A concurrent request with the same idempotency key won the insert; the
+        # unique constraint guarantees exactly one row, so return that one.
+        payment = None
+        if idempotency_key:
+            payment = Payment.objects.filter(
+                user=user, plan=plan, idempotency_key=idempotency_key
+            ).first()
+        if payment is None:
+            payment = Payment.objects.get(provider_order_id=order["id"])
 
     logger.info(
         "Razorpay order created",

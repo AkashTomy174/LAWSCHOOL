@@ -280,7 +280,7 @@ class VideoRegisterView(APIView):
             title=data["title"],
             cloudflare_video_id=data["cloudflare_video_id"],
             description=data.get("description", ""),
-            require_signed_urls=data.get("require_signed_urls", True),
+            owner=request.user,
         )
         if lesson is not None:
             lesson.video = video
@@ -305,7 +305,7 @@ class DirectUploadURLView(APIView):
         from apps.videos.cloudflare import CloudflareStreamError, client
 
         try:
-            result = client.create_direct_upload()
+            result = client.create_direct_upload(creator=str(request.user.pk))
         except CloudflareStreamError as exc:
             return Response(
                 {
