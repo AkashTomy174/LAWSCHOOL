@@ -24,7 +24,8 @@ sufficient; together, revoking access in Django takes effect within the token TT
 ```env
 CLOUDFLARE_ACCOUNT_ID=xxxxxxxx
 CLOUDFLARE_API_TOKEN=xxxxxxxx        # "Stream: Edit" permission
-CLOUDFLARE_STREAM_SIGNING_KEY=<key_id>:<secret>
+CLOUDFLARE_STREAM_KEY_ID=<id>            # from POST /stream/keys
+CLOUDFLARE_STREAM_SIGNING_KEY=<base64 pem>  # RSA private key; tokens are RS256
 CLOUDFLARE_STREAM_CUSTOMER_CODE=xxxx # "customer-<code>" subdomain
 CLOUDFLARE_PLAYBACK_TOKEN_TTL=300    # seconds
 ```

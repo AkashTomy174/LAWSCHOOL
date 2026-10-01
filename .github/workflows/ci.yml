@@ -74,7 +74,8 @@ jobs:
       RAZORPAY_WEBHOOK_SECRET: ci_webhook_secret
       CLOUDFLARE_ACCOUNT_ID: ci-account
       CLOUDFLARE_API_TOKEN: ci-token
-      CLOUDFLARE_STREAM_SIGNING_KEY: ci-key-id:ci-signing-secret
+      CLOUDFLARE_STREAM_KEY_ID: ci-key-id
+      CLOUDFLARE_STREAM_SIGNING_KEY: ci-signing-key
       CLOUDFLARE_STREAM_CUSTOMER_CODE: ci-customer
 
     steps:

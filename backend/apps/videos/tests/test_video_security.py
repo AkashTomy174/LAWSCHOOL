@@ -34,6 +34,20 @@ def playback_url(video) -> str:
     return f"/api/v1/videos/{video.playback_uid}/playback/"
 
 
+def _watched_then(user, video, **final):
+    """Issue a playback token, send a warm-up heartbeat, then the final update."""
+    PlaybackSession.objects.create(
+        user=user,
+        video=video,
+        token_fingerprint="fp",
+        expires_at=timezone.now() + timedelta(minutes=5),
+    )
+    update_video_progress(
+        user=user, video=video, position_seconds=max(0, final["position_seconds"] - 5)
+    )
+    return update_video_progress(user=user, video=video, **final)
+
+
 def progress_url(video) -> str:
     return f"/api/v1/videos/{video.playback_uid}/progress/"
 
@@ -138,9 +152,11 @@ class TestPlaybackAuthorization:
     def test_playback_never_returns_the_signing_key(
         self, jwt_client, student, lesson, active_subscription, settings
     ):
-        settings.CLOUDFLARE_STREAM_SIGNING_KEY = "keyid:supersecret"
+        private_key = settings.CLOUDFLARE_STREAM_SIGNING_KEY
         response = jwt_client(student).get(playback_url(lesson.video))
-        assert "supersecret" not in json.dumps(response.data, default=str)
+        body = json.dumps(response.data, default=str)
+        assert private_key not in body
+        assert "PRIVATE KEY" not in body
 
     def test_missing_signing_key_returns_503_not_500(
         self, jwt_client, student, lesson, active_subscription, settings
@@ -165,7 +181,7 @@ class TestPlaybackAuthorization:
     def test_malformed_signing_key_returns_503(
         self, jwt_client, student, lesson, active_subscription, settings
     ):
-        """A signing key without the ``<key_id>:<secret>`` separator is malformed."""
+        """A signing key that is not a base64/PEM RSA key is malformed."""
         settings.CLOUDFLARE_STREAM_SIGNING_KEY = "no-colon-here"
         response = jwt_client(student).get(playback_url(lesson.video))
         assert response.status_code == 503
@@ -217,51 +233,67 @@ class TestLessonWatchEndpoint:
 # Token construction
 # --------------------------------------------------------------------------- #
 class TestSignedToken:
-    def test_token_is_a_valid_hs256_jwt(self, settings):
-        settings.CLOUDFLARE_STREAM_SIGNING_KEY = "kid123:secret456"
+    def test_token_is_a_valid_rs256_jwt(self, settings):
+        import jwt
+        from django.conf import settings as django_settings
+
         token, expires_at = build_signed_playback_token(
             video_uid="cf-abc", ttl_seconds=300
         )
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
+        assert header["kid"] == settings.CLOUDFLARE_STREAM_KEY_ID
 
-        header_b64, payload_b64, signature_b64 = token.split(".")
-
-        def decode(part: str) -> dict:
-            padded = part + "=" * (-len(part) % 4)
-            return json.loads(base64.urlsafe_b64decode(padded))
-
-        header, payload = decode(header_b64), decode(payload_b64)
-        assert header["alg"] == "HS256"
-        assert header["kid"] == "kid123"
+        # Cloudflare verifies with the public half of the key.
+        payload = jwt.decode(
+            token,
+            django_settings.TEST_CLOUDFLARE_PUBLIC_KEY,
+            algorithms=["RS256"],
+        )
         assert payload["sub"] == "cf-abc"
+        assert payload["kid"] == settings.CLOUDFLARE_STREAM_KEY_ID
         assert payload["downloadable"] is False
 
-        expected = hmac.new(
-            b"secret456", f"{header_b64}.{payload_b64}".encode(), hashlib.sha256
-        ).digest()
-        assert base64.urlsafe_b64encode(expected).decode().rstrip("=") == signature_b64
+    def test_a_symmetric_secret_is_not_accepted(self, settings):
+        """The old ``<id>:<secret>`` HS256 format must fail closed."""
+        from apps.videos.cloudflare import CloudflareStreamError
+
+        settings.CLOUDFLARE_STREAM_SIGNING_KEY = "kid123:secret456"
+        with pytest.raises(CloudflareStreamError):
+            build_signed_playback_token(video_uid="cf-abc")
+
+    def test_pem_is_accepted_without_base64(self, settings):
+        import base64 as b64
+
+        import jwt
+
+        pem = b64.b64decode(settings.CLOUDFLARE_STREAM_SIGNING_KEY).decode()
+        settings.CLOUDFLARE_STREAM_SIGNING_KEY = pem
+        token, _ = build_signed_playback_token(video_uid="cf-abc")
+        assert jwt.get_unverified_header(token)["alg"] == "RS256"
 
     def test_token_expiry_matches_requested_ttl(self, settings):
-        settings.CLOUDFLARE_STREAM_SIGNING_KEY = "kid:secret"
+        import jwt
+
         token, expires_at = build_signed_playback_token(
             video_uid="cf-abc", ttl_seconds=120
         )
-        payload = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
-        assert payload["exp"] - payload["iat"] == 120
+        payload = jwt.decode(token, options={"verify_signature": False})
+        # nbf is backdated 30s for clock skew; exp is now + ttl.
+        assert payload["exp"] - payload["nbf"] == 150
         assert expires_at > timezone.now()
-
-    def test_tokens_differ_between_requests(self, settings):
-        """Tokens must not be cached/derivable by a client."""
-        settings.CLOUDFLARE_STREAM_SIGNING_KEY = "kid:secret"
-        first, _ = build_signed_playback_token(video_uid="cf-abc", ttl_seconds=300)
-        second, _ = build_signed_playback_token(video_uid="cf-abc", ttl_seconds=300)
-        # Signatures match (deterministic), but expiry/nbf windows move with time,
-        # so a captured token is only valid inside its own window.
-        assert first.split(".")[0] == second.split(".")[0]  # same header
 
     def test_missing_signing_key_fails_closed(self, settings):
         from apps.videos.cloudflare import CloudflareStreamError
 
         settings.CLOUDFLARE_STREAM_SIGNING_KEY = ""
+        with pytest.raises(CloudflareStreamError):
+            build_signed_playback_token(video_uid="cf-abc")
+
+    def test_missing_key_id_fails_closed(self, settings):
+        from apps.videos.cloudflare import CloudflareStreamError
+
+        settings.CLOUDFLARE_STREAM_KEY_ID = ""
         with pytest.raises(CloudflareStreamError):
             build_signed_playback_token(video_uid="cf-abc")
 
@@ -442,6 +474,7 @@ class TestProgressValidation:
         self, jwt_client, student, lesson, active_subscription
     ):
         client = jwt_client(student)
+        client.get(playback_url(lesson.video))  # a token must have been issued
         # Step forward in believable increments so the drift guard permits it.
         for position in range(30, 601, 30):
             client.post(
@@ -456,6 +489,34 @@ class TestProgressValidation:
         )
         assert response.data["completed"] is True
         assert float(response.data["completion_percentage"]) == 100.0
+
+    def test_first_heartbeat_cannot_complete_a_video(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        client = jwt_client(student)
+        client.get(playback_url(lesson.video))
+        response = client.post(
+            progress_url(lesson.video),
+            {"position_seconds": 600, "completed": True},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["completed"] is False
+
+    def test_completion_requires_an_issued_playback_token(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        client = jwt_client(student)
+        for position in range(30, 601, 30):
+            client.post(
+                progress_url(lesson.video), {"position_seconds": position}, format="json"
+            )
+        response = client.post(
+            progress_url(lesson.video),
+            {"position_seconds": 600, "completed": True},
+            format="json",
+        )
+        assert response.data["completed"] is False
 
     def test_completion_requires_actual_playback_not_just_a_flag(
         self, jwt_client, student, lesson, active_subscription
@@ -509,8 +570,8 @@ class TestProgressServiceDirect:
     def test_service_completes_at_full_percentage(
         self, student, lesson, active_subscription
     ):
-        progress = update_video_progress(
-            user=student, video=lesson.video, position_seconds=595, completed=True
+        progress = _watched_then(
+            student, lesson.video, position_seconds=595, completed=True
         )
         assert progress.completed is True
         assert progress.completed_at is not None
@@ -539,9 +600,7 @@ class TestProgressEndpoints:
     def test_course_progress_aggregates_correctly(
         self, jwt_client, student, course, lesson, active_subscription
     ):
-        update_video_progress(
-            user=student, video=lesson.video, position_seconds=600, completed=True
-        )
+        _watched_then(student, lesson.video, position_seconds=600, completed=True)
         response = jwt_client(student).get(f"/api/v1/progress/course/{course.slug}/")
         assert response.data["total_lessons"] == 1
         assert response.data["completed_lessons"] == 1
@@ -588,3 +647,114 @@ class TestVideoAdminEndpoints:
         )
         assert response.status_code == 200
         assert "cloudflare_video_id" not in response.data
+
+
+# --------------------------------------------------------------------------- #
+# Audit regressions: ownership + metadata disclosure
+# --------------------------------------------------------------------------- #
+class TestVideoOwnership:
+    @pytest.fixture
+    def other_instructor(self, db):
+        from apps.users.models import User
+
+        return User.objects.create_user(
+            email="other-instructor@test.local",
+            password="InstructorPass123!",
+            name="Other Instructor",
+            role="instructor",
+        )
+
+    def test_instructor_cannot_attach_video_to_foreign_lesson(
+        self, jwt_client, other_instructor, lesson
+    ):
+        response = jwt_client(other_instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Hijack", "cloudflare_video_id": "cf-hijack", "lesson": str(lesson.id)},
+            format="json",
+        )
+        assert response.status_code == 403
+
+    def test_instructor_cannot_sync_foreign_video(
+        self, jwt_client, other_instructor, lesson
+    ):
+        response = jwt_client(other_instructor).post(
+            f"/api/v1/videos/{lesson.video.playback_uid}/sync/"
+        )
+        assert response.status_code == 404
+
+    def test_unentitled_student_cannot_read_video_metadata(
+        self, jwt_client, student, lesson
+    ):
+        response = jwt_client(student).get(f"/api/v1/videos/{lesson.video.playback_uid}/")
+        assert response.status_code == 404
+
+    def test_entitled_student_can_read_video_metadata(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        response = jwt_client(student).get(f"/api/v1/videos/{lesson.video.playback_uid}/")
+        assert response.status_code == 200
+
+
+class TestSignedUploadsAndRegistration:
+    @pytest.fixture
+    def cloudflare(self, monkeypatch):
+        from unittest import mock
+
+        fake = mock.MagicMock()
+        fake.get_video.return_value = {"status": {"state": "ready"}, "duration": 60}
+        monkeypatch.setattr("apps.videos.services.client", fake)
+        return fake
+
+    def test_instructor_registers_only_own_upload(
+        self, jwt_client, instructor, section, cloudflare
+    ):
+        cloudflare.get_video.return_value = {"creator": str(instructor.pk), "duration": 60}
+        ok = jwt_client(instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Mine", "cloudflare_video_id": "cf-mine"},
+            format="json",
+        )
+        assert ok.status_code == 201, ok.data
+        cloudflare.update_video.assert_called_with("cf-mine", require_signed_urls=True)
+
+    def test_instructor_cannot_register_someone_elses_upload(
+        self, jwt_client, instructor, cloudflare
+    ):
+        cloudflare.get_video.return_value = {"creator": "someone-else"}
+        response = jwt_client(instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Theirs", "cloudflare_video_id": "cf-theirs"},
+            format="json",
+        )
+        assert response.status_code == 403
+
+    def test_signed_urls_cannot_be_disabled_by_the_client(
+        self, jwt_client, instructor, cloudflare
+    ):
+        from apps.videos.models import Video
+
+        cloudflare.get_video.return_value = {"creator": str(instructor.pk), "duration": 60}
+        response = jwt_client(instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Open", "cloudflare_video_id": "cf-open", "require_signed_urls": False},
+            format="json",
+        )
+        assert response.status_code == 201
+        assert Video.objects.get(cloudflare_video_id="cf-open").require_signed_urls is True
+
+    def test_direct_upload_is_signed_and_bound_to_creator(self, monkeypatch):
+        from apps.videos.cloudflare import CloudflareStreamClient
+
+        sent = {}
+
+        def fake_request(self, method, path, **kwargs):
+            sent.update(kwargs["json"])
+            return {"uploadURL": "u", "uid": "x"}
+
+        monkeypatch.setattr(CloudflareStreamClient, "_request", fake_request)
+        CloudflareStreamClient(account_id="a", api_token="t").create_direct_upload(
+            creator="user-1"
+        )
+        assert sent["requireSignedURLs"] is True
+        assert sent["creator"] == "user-1"
+        assert sent["expiry"] and sent["allowedOrigins"]

@@ -102,6 +102,13 @@ class Payment(models.Model):
             models.CheckConstraint(
                 condition=Q(amount__gte=0), name="payment_amount_non_negative"
             ),
+            # The database, not the application, owns idempotency: two concurrent
+            # requests with the same key cannot both insert a row.
+            models.UniqueConstraint(
+                fields=["user", "plan", "idempotency_key"],
+                condition=~Q(idempotency_key=""),
+                name="payment_idempotency_unique",
+            ),
         ]
 
     def __str__(self) -> str:

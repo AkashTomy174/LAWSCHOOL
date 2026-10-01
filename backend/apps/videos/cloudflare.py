@@ -90,14 +90,35 @@ class CloudflareStreamClient:
 
     # ---- operations ------------------------------------------------------ #
     def create_direct_upload(
-        self, *, max_duration_seconds: int | None = None
+        self,
+        *,
+        creator: str = "",
+        max_duration_seconds: int | None = None,
+        expiry_minutes: int = 30,
     ) -> dict[str, Any]:
         """Create a one-time upload URL for the instructor's browser.
 
         A direct-upload URL means large files go straight from the instructor to
         Cloudflare and never transit (or get stored on) the Django server.
+
+        Paid content is *always* created with ``requireSignedURLs`` -- it is not a
+        per-upload choice -- and the asset is stamped with the uploading user
+        (``creator``) so registration can later prove who owns it.
         """
-        body: dict[str, Any] = {"maxDurationSeconds": max_duration_seconds or 3600}
+        from datetime import datetime, timedelta, timezone as dt_timezone
+        from urllib.parse import urlparse
+
+        expiry = datetime.now(tz=dt_timezone.utc) + timedelta(minutes=expiry_minutes)
+        body: dict[str, Any] = {
+            "maxDurationSeconds": max_duration_seconds or 3600,
+            "requireSignedURLs": True,
+            "expiry": expiry.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        if creator:
+            body["creator"] = str(creator)
+        origin = urlparse(settings.FRONTEND_URL).hostname
+        if origin:
+            body["allowedOrigins"] = [origin]
         return self._request("POST", "/direct_upload", json=body)
 
     def get_video(self, video_id: str) -> dict[str, Any]:

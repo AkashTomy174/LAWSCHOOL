@@ -49,9 +49,11 @@ def _progress_context(user, courses) -> dict:
     from apps.videos.models import VideoProgress
 
     course_ids = [course.id for course in courses]
+    # Scoped to the courses on this page; an unscoped query would load every
+    # completed lesson the user has ever finished.
     completed = set(
         VideoProgress.objects.filter(
-            user=user, completed=True, lesson__isnull=False
+            user=user, completed=True, lesson__section__course_id__in=course_ids
         ).values_list("lesson_id", flat=True)
     )
     totals = dict(
@@ -163,7 +165,9 @@ class CourseDetailView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         if self.request.method in {"PATCH", "PUT"}:
-            return [IsInstructorOrAdmin()]
+            # Role alone is not enough: the object-level check in get_object()
+            # additionally requires the instructor to own this course.
+            return [IsCourseOwnerOrAdmin()]
         return super().get_permissions()
 
     def get_queryset(self):
@@ -179,6 +183,7 @@ class CourseDetailView(generics.RetrieveUpdateAPIView):
         if course is None:
             # Staff need drafts too, which course_detail filters out.
             course = get_object_or_404(self.get_queryset(), slug=self.kwargs["slug"])
+        self.check_object_permissions(self.request, course)
         return course
 
     def retrieve(self, request, *args, **kwargs):
