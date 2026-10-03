@@ -1,20 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "../../components/Layout";
-import {
-  Avatar,
-  Badge,
-  Button,
-  EmptyState,
-  ErrorState,
-  Panel,
-  Skeleton,
-} from "../../components/ui";
+import Icon from "../../components/Icon";
+import { EmptyState, ErrorState, Skeleton } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
 import useAsync from "../../hooks/useAsync";
+import { useSearchParams } from "react-router-dom";
 import { leaderboardService } from "../../services/quizService";
-import { formatRelative } from "../../utils/format";
+import { formatRelative, initials } from "../../utils/format";
 
 /**
  * Leaderboard.
@@ -79,87 +71,87 @@ export default function Leaderboard() {
 
   const entries = data?.results || [];
   const totalPages = data?.num_pages || 1;
-  const podium = page === 1 ? entries.slice(0, 3) : [];
-  const rest = page === 1 ? entries.slice(3) : entries;
+  const podium = page === 1 && entries.length >= 3 ? entries.slice(0, 3) : [];
+  const rest = podium.length ? entries.slice(3) : entries;
+  const sortLabel = SORTS.find((sort) => sort.value === ordering)?.label;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-10">
-      <PageHeader
-        title="Leaderboard"
-        description="Ranked by quiz score plus completed lessons. Only aggregate scores are shown — never contact details."
-        breadcrumbs={[{ label: "Home", to: "/" }, { label: "Leaderboard" }]}
-      />
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="flex flex-col gap-3 pb-10">
+        <h1 className="d2">Leaderboard</h1>
+        <p className="body max-w-[600px]">
+          Ranked by quiz score plus completed lessons. Only aggregate scores are
+          shown, never contact details.
+        </p>
+      </div>
 
       {/* --------------------------------------------------------- My position */}
       {me && (
-        <Panel className="mb-6 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gold-500/15 font-display text-xl text-gold-300">
-                {me.rank ? `#${me.rank}` : "\u2014"}
-              </div>
-              <div>
-                <p className="font-display text-lg text-parchment">
-                  Your standing
-                </p>
-                <p className="text-sm text-white/55">
-                  {me.rank
-                    ? `Rank ${me.rank}${me.percentile !== null ? ` · top ${Math.max(1, Math.round(100 - me.percentile))}%` : ""}`
-                    : "Complete a lesson or quiz to enter the ranking"}
-                </p>
-              </div>
+        <section
+          aria-label="Your standing"
+          className="mb-10 flex flex-col gap-6 rounded-[14px] bg-gold-tint p-6 md:flex-row md:items-center md:justify-between"
+        >
+          <div className="flex items-center gap-5">
+            <span className="min-w-[64px] font-serif text-[48px] leading-none text-[#0B1220] num">
+              {me.rank ? `#${me.rank}` : "–"}
+            </span>
+            <div className="flex flex-col">
+              <span className="font-medium text-[#0B1220]">Your standing</span>
+              <span className="small !text-[#4A3A00]">
+                {me.rank
+                  ? `Top ${me.percentile !== null ? Math.max(1, Math.round(100 - me.percentile)) : 100}% of students`
+                  : "Complete a lesson or quiz to enter the ranking"}
+              </span>
             </div>
-
-            <dl className="flex gap-6 text-sm">
-              <Stat label="Total" value={me.total_score} />
-              <Stat label="Quiz" value={me.quiz_score} />
-              <Stat label="Lessons" value={me.lessons_completed} />
-              <Stat label="Courses" value={me.courses_completed} />
-            </dl>
           </div>
-        </Panel>
+
+          <dl className="m-0 grid grid-cols-4 gap-6">
+            <Stat label="Total" value={me.total_score} />
+            <Stat label="Quiz" value={me.quiz_score} />
+            <Stat label="Lessons" value={me.lessons_completed} />
+            <Stat label="Courses" value={me.courses_completed} />
+          </dl>
+        </section>
       )}
 
       {/* -------------------------------------------------------------- Sorting */}
       <div
-        className="mb-5 flex flex-wrap gap-2"
+        className="flex flex-wrap gap-2 pb-8"
         role="group"
         aria-label="Sort leaderboard"
       >
         {SORTS.map((sort) => (
-          <Button
+          <button
             key={sort.value}
-            variant={ordering === sort.value ? "primary" : "ghost"}
+            type="button"
             onClick={() => changeSort(sort.value)}
-            className="!min-h-0 !py-2 text-sm"
+            className={`btn ${ordering === sort.value ? "btn-gold" : "btn-line"}`}
             aria-pressed={ordering === sort.value}
           >
             {sort.label}
-          </Button>
+          </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {Array.from({ length: 8 }).map((_, index) => (
-            <Skeleton key={index} className="h-16 w-full" />
+            <Skeleton key={index} className="h-14 w-full" />
           ))}
         </div>
       ) : error ? (
         <ErrorState error={error} onRetry={refetch} />
       ) : entries.length === 0 ? (
-        <Panel>
+        <div className="border-y border-line">
           <EmptyState
-            icon="chart"
             title="No rankings yet"
             description="Scores appear once students complete lessons and quizzes."
           />
-        </Panel>
+        </div>
       ) : (
         <>
-          {/* Podium for the top three on page 1 */}
           {podium.length === 3 && (
-            <div className="mb-6 grid gap-4 sm:grid-cols-3">
+            <ol className="m-0 mb-10 grid list-none gap-5 p-0 md:grid-cols-3">
               {podium.map((entry, index) => (
                 <PodiumCard
                   key={entry.user_id}
@@ -168,110 +160,116 @@ export default function Leaderboard() {
                   isMe={entry.user_id === user?.id}
                 />
               ))}
-            </div>
+            </ol>
           )}
 
-          {/* Table */}
-          <Panel className="overflow-hidden">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">
-                Student leaderboard ranked by{" "}
-                {SORTS.find((sort) => sort.value === ordering)?.label}
-              </caption>
-              <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
-                <tr>
-                  <th scope="col" className="px-4 py-3">
-                    Rank
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Student
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 sm:table-cell">
-                    Quiz
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 sm:table-cell">
-                    Lessons
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right">
-                    Score
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {rest.map((entry) => {
-                  const isMe = entry.user_id === user?.id;
-                  return (
-                    <tr
-                      key={entry.user_id}
-                      className={isMe ? "bg-gold-500/10" : undefined}
+          {rest.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[420px] border-collapse text-[15px]">
+                <caption className="sr-only">
+                  Student leaderboard ranked by {sortLabel}
+                </caption>
+                <thead>
+                  <tr className="border-b border-line-strong text-left text-[13px] text-ink3">
+                    <th scope="col" className="w-16 pb-3 font-medium">
+                      Rank
+                    </th>
+                    <th scope="col" className="pb-3 font-medium">
+                      Student
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden pb-3 text-right font-medium sm:table-cell"
                     >
-                      <td className="px-4 py-3 font-display text-white/70">
-                        {entry.rank || "\u2014"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="flex items-center gap-3">
-                          <Avatar
-                            user={{
-                              name: entry.name,
-                              avatar: entry.avatar_url,
-                            }}
-                            size={30}
-                          />
-                          <span className="min-w-0">
-                            <span className="block truncate text-parchment">
-                              {entry.name}
-                              {isMe && (
-                                <span className="ml-2 text-xs text-gold-300">
-                                  (you)
+                      Quiz
+                    </th>
+                    <th
+                      scope="col"
+                      className="hidden pb-3 text-right font-medium sm:table-cell"
+                    >
+                      Lessons
+                    </th>
+                    <th scope="col" className="pb-3 text-right font-medium">
+                      Score
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rest.map((entry) => {
+                    const isMe = entry.user_id === user?.id;
+                    return (
+                      <tr
+                        key={entry.user_id}
+                        className={`border-b border-line ${isMe ? "bg-gold-tint" : ""}`}
+                      >
+                        <td className="mono py-4 pl-1 text-ink2">
+                          {entry.rank || "–"}
+                        </td>
+                        <td className="py-3 pr-4">
+                          <span className="flex items-center gap-3">
+                            <span className="avatar !h-9 !w-9 !text-xs">
+                              {initials(entry.name)}
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block truncate">
+                                {entry.name}
+                                {isMe && (
+                                  <span className="ml-2 text-[13px] font-medium text-gold-ink">
+                                    you
+                                  </span>
+                                )}
+                              </span>
+                              {entry.last_activity_at && (
+                                <span className="cap">
+                                  Active {formatRelative(entry.last_activity_at)}
                                 </span>
                               )}
                             </span>
-                            {entry.last_activity_at && (
-                              <span className="text-xs text-white/40">
-                                Active {formatRelative(entry.last_activity_at)}
-                              </span>
-                            )}
                           </span>
-                        </span>
-                      </td>
-                      <td className="hidden px-4 py-3 text-white/65 sm:table-cell">
-                        {entry.quiz_score}
-                      </td>
-                      <td className="hidden px-4 py-3 text-white/65 sm:table-cell">
-                        {entry.lessons_completed}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-gold-300">
-                        {entry.total_score}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </Panel>
+                        </td>
+                        <td className="mono hidden text-right text-ink3 sm:table-cell">
+                          {entry.quiz_score}
+                        </td>
+                        <td className="mono hidden text-right text-ink3 sm:table-cell">
+                          {entry.lessons_completed}
+                        </td>
+                        <td className="mono pr-1 text-right font-medium">
+                          {entry.total_score}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {totalPages > 1 && (
             <nav
-              className="mt-6 flex items-center justify-center gap-2"
+              className="flex items-center justify-center gap-3 pt-10"
               aria-label="Pagination"
             >
-              <Button
-                variant="ghost"
+              <button
+                type="button"
+                className="btn btn-line"
                 disabled={page <= 1}
                 onClick={() => setPage(page - 1)}
               >
+                <Icon name="caretLeft" />
                 Previous
-              </Button>
-              <span className="px-3 text-sm text-white/60">
+              </button>
+              <span className="small num px-2">
                 Page {page} of {totalPages}
               </span>
-              <Button
-                variant="ghost"
+              <button
+                type="button"
+                className="btn btn-line"
                 disabled={page >= totalPages}
                 onClick={() => setPage(page + 1)}
               >
                 Next
-              </Button>
+                <Icon name="caretRight" />
+              </button>
             </nav>
           )}
         </>
@@ -282,35 +280,34 @@ export default function Leaderboard() {
 
 function Stat({ label, value }) {
   return (
-    <div>
-      <dt className="text-xs uppercase tracking-wider text-white/40">
-        {label}
-      </dt>
-      <dd className="font-semibold text-parchment">{value}</dd>
+    <div className="flex flex-col">
+      <dd className="m-0 font-serif text-[28px] leading-[1.1] text-[#0B1220] num">
+        {value}
+      </dd>
+      <dt className="small !text-[#4A3A00]">{label}</dt>
     </div>
   );
 }
 
 function PodiumCard({ entry, place, isMe }) {
-  const medals = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
+  const first = place === 1;
   return (
-    <Panel className={`p-5 text-center ${isMe ? "border-gold-500" : ""}`}>
-      <div className="text-3xl" aria-hidden="true">
-        {medals[place]}
+    <li
+      className={`flex flex-col gap-4 rounded-[14px] p-6 ${first ? "navy-surface" : "card"} ${isMe ? "ring-2 ring-gold" : ""}`}
+    >
+      <div className="flex items-center justify-between">
+        <span
+          className={`mono cap ${first ? "!text-[#B4BED6]" : ""}`}
+        >{`Rank ${entry.rank || place}`}</span>
+        {isMe && <span className="tag tag-gold">You</span>}
       </div>
-      <p className="mt-2 truncate font-display text-lg text-parchment">
-        {entry.name}
-      </p>
-      <p className="text-xs text-white/45">Rank {entry.rank}</p>
-      <p className="mt-3 font-display text-2xl text-gold-300">
-        {entry.total_score}
-      </p>
-      <p className="text-xs text-white/45">points</p>
-      {isMe && (
-        <div className="mt-2">
-          <Badge tone="gold">That&apos;s you</Badge>
-        </div>
-      )}
-    </Panel>
+      <span className="font-serif text-[56px] leading-none num">{place}</span>
+      <div className="flex flex-col">
+        <span className="truncate text-[17px] font-medium">{entry.name}</span>
+        <span className={`mono ${first ? "text-[#B4BED6]" : "small"}`}>
+          {entry.total_score} points
+        </span>
+      </div>
+    </li>
   );
 }

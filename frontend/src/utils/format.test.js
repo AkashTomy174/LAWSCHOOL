@@ -5,6 +5,7 @@ import {
   formatDuration,
   formatDurationLabel,
   formatMoney,
+  formatPrice,
   formatPaise,
   formatPercent,
   initials,
@@ -116,5 +117,17 @@ describe("formatDaysRemaining", () => {
     expect(formatDaysRemaining(-5)).toBe("Expired");
     expect(formatDaysRemaining(1)).toBe("1 day left");
     expect(formatDaysRemaining(30)).toBe("30 days left");
+  });
+});
+
+describe("formatPrice", () => {
+  it("shows whole rupees without decimals and keeps paise when present", () => {
+    expect(formatPrice("1999.00")).toBe("₹1,999");
+    expect(formatPrice(123456)).toBe("₹1,23,456");
+    expect(formatPrice("499.50")).toBe("₹499.50");
+  });
+
+  it("falls back to the currency code for non-rupee prices", () => {
+    expect(formatPrice(10, "USD")).toBe("USD 10");
   });
 });

@@ -333,22 +333,31 @@ def process_webhook(
 
     Order of operations matters:
 
-    1. Verify the signature over the *raw* body (reject early, log loudly).
+    1. Verify the signature over the *raw* body -- an unsigned request writes
+       nothing, otherwise anyone could pre-claim a real event id (making the
+       genuine delivery look like a duplicate) or fill the table.
     2. Record the event for idempotency.
-    3. Apply the state change idempotently.
+    3. Apply the state change idempotently.  Only a *processed* event counts as
+       a duplicate: a delivery whose handler failed is retried by Razorpay and
+       must be processed again, not acknowledged and dropped.
     """
-    signature_valid = gateway.verify_webhook_signature(
-        raw_body=raw_body, signature=signature
-    )
+    if not gateway.verify_webhook_signature(raw_body=raw_body, signature=signature):
+        logger.error(
+            "Webhook signature verification failed", extra={"event_id": event_id}
+        )
+        raise PaymentError(
+            {"detail": "Invalid webhook signature."}, code="invalid_signature"
+        )
+
     event, created = record_webhook_event(
         event_id=event_id,
         event_type=event_type,
         payload=payload,
         raw_body=raw_body,
-        signature_valid=signature_valid,
+        signature_valid=True,
     )
 
-    if not created:
+    if not created and event.processed:
         logger.info(
             "Duplicate webhook ignored",
             extra={"event_id": event_id, "event_type": event_type},
@@ -358,16 +367,16 @@ def process_webhook(
             "event_id": event_id,
             "processed": event.processed,
         }
-
-    if not signature_valid:
-        event.processing_error = "Signature verification failed."
-        event.save(update_fields=["processing_error"])
-        logger.error(
-            "Webhook signature verification failed", extra={"event_id": event_id}
+    if not created:
+        logger.info(
+            "Retrying unprocessed webhook",
+            extra={"event_id": event_id, "event_type": event_type},
         )
-        raise PaymentError(
-            {"detail": "Invalid webhook signature."}, code="invalid_signature"
-        )
+        if not event.signature_valid:
+            # A row left behind by an older, unsigned request with this id.
+            event.signature_valid = True
+            event.payload = payload
+            event.save(update_fields=["signature_valid", "payload"])
 
     handler = _WEBHOOK_HANDLERS.get(event_type)
     if handler is None:

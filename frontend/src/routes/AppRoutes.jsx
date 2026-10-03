@@ -142,7 +142,6 @@ export default function AppRoutes() {
           {/* -------------------------------------------------- Staff only */}
           <Route element={<RequireRole roles={STAFF_ROLES} />}>
             <Route path="admin" element={<AdminDashboard />} />
-            <Route path="admin/users" element={<AdminUsers />} />
             <Route path="admin/courses" element={<AdminCourses />} />
             <Route path="admin/courses/:id" element={<AdminCourses />} />
             <Route
@@ -153,6 +152,11 @@ export default function AppRoutes() {
             <Route path="admin/videos" element={<AdminVideos />} />
             <Route path="admin/quizzes" element={<AdminQuizzes />} />
             <Route path="admin/leaderboard" element={<AdminLeaderboard />} />
+          </Route>
+
+          {/* -------------------------------------------------- Admin only */}
+          <Route element={<RequireRole roles={["admin"]} />}>
+            <Route path="admin/users" element={<AdminUsers />} />
           </Route>
 
           {/* --------------------------------------------------------- 404 */}

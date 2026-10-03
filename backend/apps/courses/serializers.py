@@ -237,6 +237,11 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     def validate(self, attrs: dict) -> dict:
         section = attrs.get("section") or getattr(self.instance, "section", None)
         ordering = attrs.get("ordering", getattr(self.instance, "ordering", None))
+        quiz = attrs.get("quiz", getattr(self.instance, "quiz", None))
+        if section and quiz and quiz.course_id != section.course_id:
+            raise serializers.ValidationError(
+                {"quiz": "The quiz must belong to the same course as the lesson."}
+            )
         if section and ordering:
             clash = Lesson.objects.filter(section=section, ordering=ordering)
             if self.instance:

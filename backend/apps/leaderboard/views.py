@@ -93,7 +93,12 @@ class LeaderboardTopView(APIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get(self, request):
-        limit = min(int(request.query_params.get("limit", 10)), 50)
+        try:
+            limit = int(request.query_params.get("limit", 10))
+        except ValueError:
+            limit = 10
+        # Clamped both ways: a negative slice raises inside the ORM (HTTP 500).
+        limit = max(1, min(limit, 50))
         cache_key = f"leaderboard:top:{limit}"
         cached = cache.get(cache_key)
         if cached is None:

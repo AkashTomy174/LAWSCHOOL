@@ -276,37 +276,70 @@ class TestCourseAuthoring:
         )
         assert response.status_code == 403
 
-    def test_instructor_can_create_a_course(self, auth_client, instructor):
+    def test_instructor_cannot_create_a_course(self, auth_client, instructor):
+        """Course ownership is admin-only; instructors can only view."""
         response = auth_client(instructor).post(
             "/api/v1/courses/",
-            {
-                "title": "New Course",
-                "description": "Created by its instructor.",
-                "status": "draft",
-            },
+            {"title": "New Course", "description": "Self-made.", "status": "draft"},
             format="json",
         )
-        assert response.status_code == 201, response.data
-        course = Course.objects.get(pk=response.data["id"])
-        # The instructor defaults to the caller rather than being required.
-        assert course.instructor_id == instructor.pk
-        assert course.slug == "new-course"
+        assert response.status_code == 403
+        assert not Course.objects.filter(title="New Course").exists()
 
-    def test_instructor_cannot_assign_someone_else_as_instructor(
-        self, auth_client, instructor, admin_user
+    def test_instructor_cannot_take_over_another_instructors_course(
+        self, auth_client, course
     ):
-        response = auth_client(instructor).post(
-            "/api/v1/courses/",
-            {
-                "title": "Impersonation",
-                "description": "Attempted ownership transfer.",
-                "instructor": str(admin_user.pk),
-                "status": "draft",
-            },
+        """Regression: PATCHing ``instructor`` to yourself transferred ownership."""
+        from apps.users.models import User
+
+        outsider = User.objects.create_instructor(
+            email="outsider@test.local", password="Instructor123!", name="Outsider"
+        )
+        response = auth_client(outsider).patch(
+            f"/api/v1/courses/{course.slug}/",
+            {"instructor": str(outsider.pk), "unlock_rule": "free"},
             format="json",
         )
-        assert response.status_code == 400
-        assert "instructor" in response.data["error"]["details"]
+        assert response.status_code == 403
+        course.refresh_from_db()
+        assert course.instructor_id != outsider.pk
+        assert course.unlock_rule != "free"
+
+    def test_owner_cannot_edit_their_own_course(self, auth_client, course):
+        response = auth_client(course.instructor).patch(
+            f"/api/v1/courses/{course.slug}/", {"title": "Renamed"}, format="json"
+        )
+        assert response.status_code == 403
+
+    def test_admin_can_edit_a_course(self, auth_client, admin_user, course):
+        response = auth_client(admin_user).patch(
+            f"/api/v1/courses/{course.slug}/", {"title": "Renamed"}, format="json"
+        )
+        assert response.status_code == 200, response.data
+        course.refresh_from_db()
+        assert course.title == "Renamed"
+
+    def test_section_cannot_be_moved_into_another_instructors_course(
+        self, auth_client, course, section
+    ):
+        """Regression: PATCHing ``course`` reparented content without a check."""
+        from apps.users.models import User
+
+        outsider = User.objects.create_instructor(
+            email="outsider@test.local", password="Instructor123!", name="Outsider"
+        )
+        own_course = Course.objects.create(
+            title="Outsider Course", description="x", instructor=outsider
+        )
+        own_section = own_course.sections.create(title="Mine", ordering=1)
+        response = auth_client(outsider).patch(
+            f"/api/v1/sections/{own_section.pk}/",
+            {"course": str(course.pk), "ordering": 99},
+            format="json",
+        )
+        assert response.status_code == 403
+        own_section.refresh_from_db()
+        assert own_section.course_id == own_course.pk
 
     def test_admin_may_assign_another_instructor(
         self, auth_client, admin_user, instructor
@@ -377,16 +410,16 @@ class TestCourseAuthoring:
         assert response.data["error"]["code"] == "unique"
         assert response.data["error"]["details"], "an error must be reported"
 
-    def test_negative_price_is_rejected(self, auth_client, instructor):
-        response = auth_client(instructor).post(
+    def test_negative_price_is_rejected(self, auth_client, admin_user):
+        response = auth_client(admin_user).post(
             "/api/v1/courses/",
             {"title": "Negative", "description": "x", "price": "-1.00"},
             format="json",
         )
         assert response.status_code == 400
 
-    def test_unknown_status_is_rejected(self, auth_client, instructor):
-        response = auth_client(instructor).post(
+    def test_unknown_status_is_rejected(self, auth_client, admin_user):
+        response = auth_client(admin_user).post(
             "/api/v1/courses/",
             {"title": "Bad Status", "description": "x", "status": "banana"},
             format="json",

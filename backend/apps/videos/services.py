@@ -34,6 +34,7 @@ from apps.core.exceptions import (
     VideoNotReadyError,
 )
 from apps.core.logging import get_logger
+from apps.core.permissions import client_ip
 from apps.subscriptions.services import can_user_access_video
 from apps.videos.cloudflare import CloudflareStreamError, client, parse_playback_urls
 from apps.videos.models import PlaybackSession, Video, VideoProgress
@@ -178,7 +179,7 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
 
     ip_address = user_agent = None
     if request is not None:
-        ip_address = _client_ip(request)
+        ip_address = client_ip(request)
         user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:300]
 
     PlaybackSession.objects.create(
@@ -211,14 +212,6 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
         "token_expires_at": expires_at,
         "expires_in": settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL,
     }
-
-
-def _client_ip(request) -> str | None:
-    """Resolve the client IP, honouring a single trusted proxy hop."""
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
 
 
 def update_video_progress(
@@ -259,15 +252,16 @@ def update_video_progress(
             user=user, video=video, defaults={"lesson": getattr(video, "lesson", None)}
         )
 
-        drift_limit = settings.VIDEO_PROGRESS_MAX_DRIFT_SECONDS
-        # The drift guard blocks a script jumping straight to the end, but it must
-        # not punish legitimate behaviour:
-        #   * the *first* update (stored position 0) is allowed to be anywhere --
-        #     students resume mid-video and seek in the player, and a real rebuild
-        #     of "watched" time is derived from the player's own increments;
-        #   * ``update_count == 0`` therefore means "no history yet".
-        is_first_update = progress.update_count == 0 and progress.last_position == 0
-        if not is_first_update and position > progress.last_position + drift_limit:
+        # Every update -- including the first -- may advance at most the drift
+        # limit, and never faster than 2x playback speed since the last accepted
+        # heartbeat.  Exempting the first update let one request at the final
+        # second complete a lesson; without the clock bound a script could step
+        # +drift in a tight loop.  Seeking ahead is simply not recorded.
+        allowed_advance = settings.VIDEO_PROGRESS_MAX_DRIFT_SECONDS
+        if progress.update_count:
+            elapsed = (timezone.now() - progress.updated_at).total_seconds()
+            allowed_advance = min(allowed_advance, int(elapsed * 2) + 5)
+        if position > progress.last_position + allowed_advance:
             logger.warning(
                 "Suspicious progress jump rejected",
                 extra={

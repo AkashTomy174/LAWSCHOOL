@@ -14,6 +14,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
+from django.utils.text import slugify
 
 from apps.core.constants import CourseStatus, LessonStatus
 
@@ -34,7 +35,13 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         from apps.courses.models import Course, Lesson, Section
-        from apps.quizzes.models import Option, Question, Quiz
+        from apps.quizzes.models import (
+            Option,
+            Question,
+            Quiz,
+            QuizSectionRule,
+            Subject,
+        )
         from apps.subscriptions.models import Plan
         from apps.users.models import User
         from apps.videos.models import Video
@@ -81,7 +88,7 @@ class Command(BaseCommand):
         plans = self._plans(Plan)
         courses = self._courses(Course, instructor)
         self._videos_and_lessons(Video, Section, Lesson, courses)
-        self._quizzes(Quiz, Question, Option, courses)
+        self._quizzes(Quiz, Question, Option, QuizSectionRule, Subject, courses)
 
         # Give every demo plan access to every published course (all-access tiers
         # plus one limited tier that only covers the first course).
@@ -279,7 +286,7 @@ class Command(BaseCommand):
             course.refresh_aggregates()
         self.stdout.write(f"  + {created_videos} videos with lessons")
 
-    def _quizzes(self, Quiz, Question, Option, courses):
+    def _quizzes(self, Quiz, Question, Option, QuizSectionRule, Subject, courses):
         definitions = [
             {
                 "course": courses[0],
@@ -340,14 +347,18 @@ class Command(BaseCommand):
                     "is_published": True,
                 },
             )
-            for q_index, (text, options, correct, explanation) in enumerate(
-                definition["questions"], start=1
-            ):
+            # Questions live in the shared bank under a subject; a section rule
+            # tells the quiz how many to draw from it.
+            subject, _ = Subject.objects.update_or_create(
+                slug=slugify(definition["title"])[:140],
+                defaults={"name": definition["title"][:120]},
+            )
+            for text, options, correct, explanation in definition["questions"]:
                 question, _ = Question.objects.update_or_create(
-                    quiz=quiz,
-                    ordering=q_index,
-                    defaults={"text": text, "marks": 1, "explanation": explanation},
+                    text=text,
+                    defaults={"marks": 1, "explanation": explanation},
                 )
+                question.subjects.add(subject)
                 for o_index, option_text in enumerate(options, start=1):
                     Option.objects.update_or_create(
                         question=question,
@@ -357,4 +368,13 @@ class Command(BaseCommand):
                             "is_correct": option_text == correct,
                         },
                     )
+            QuizSectionRule.objects.update_or_create(
+                quiz=quiz,
+                subject=subject,
+                defaults={
+                    "question_count": len(definition["questions"]),
+                    "marks_per_question": 1,
+                    "ordering": 1,
+                },
+            )
         self.stdout.write(f"  + {len(definitions)} quizzes with questions and options")

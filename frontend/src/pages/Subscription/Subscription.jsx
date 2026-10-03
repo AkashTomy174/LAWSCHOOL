@@ -1,15 +1,7 @@
 import { Link, useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "../../components/Layout";
-import {
-  Badge,
-  Button,
-  Callout,
-  EmptyState,
-  ErrorState,
-  Panel,
-  Skeleton,
-} from "../../components/ui";
+import Icon from "../../components/Icon";
+import { Callout, ErrorState, Skeleton } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
 import { useUI } from "../../context/UIContext";
 import useAsync from "../../hooks/useAsync";
@@ -22,6 +14,7 @@ import {
   formatDate,
   formatDaysRemaining,
   formatMoney,
+  formatPrice,
 } from "../../utils/format";
 
 /**
@@ -33,7 +26,7 @@ import {
  * callback cannot activate a subscription without a valid signature.
  */
 export default function Subscription() {
-  const { user, refreshUser } = useAuth();
+  const { refreshUser } = useAuth();
   const { pushToast } = useUI();
   const [searchParams, setSearchParams] = useSearchParams();
   const checkout = useCheckout();
@@ -49,7 +42,7 @@ export default function Subscription() {
     const result = await checkout.pay(planSlug);
     if (result) {
       pushToast({
-        message: "Payment verified — your subscription is active.",
+        message: "Payment verified. Your subscription is active.",
         tone: "success",
       });
       // Refresh every affected widget: entitlement changed, so courses and the
@@ -88,19 +81,29 @@ export default function Subscription() {
     }
   }
 
+  const statusTag = (status) =>
+    status === "captured" || status === "active"
+      ? "tag-ok"
+      : status === "failed"
+        ? "tag-bad"
+        : "";
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
-      <PageHeader
-        title="Subscription"
-        description="One subscription unlocks every course included in your plan, with graded quizzes and leaderboard ranking."
-        breadcrumbs={[{ label: "Home", to: "/" }, { label: "Subscription" }]}
-      />
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="flex flex-col gap-3 pb-10">
+        <h1 className="d2">Plans</h1>
+        <p className="body max-w-[600px]">
+          One payment unlocks every course in your plan, with graded quizzes and
+          leaderboard ranking. Access runs to the end of your term and does not
+          renew by itself.
+        </p>
+      </div>
 
       {justPaid && (
-        <div className="mb-6">
+        <div className="mb-10">
           <Callout tone="success" title="Payment successful">
             Your subscription is active. Head to{" "}
-            <Link to="/courses" className="text-gold-300 underline">
+            <Link to="/courses" className="font-medium underline">
               the course catalogue
             </Link>{" "}
             to start learning.
@@ -109,83 +112,77 @@ export default function Subscription() {
       )}
 
       {/* ------------------------------------------------------- Current plan */}
-      <section aria-labelledby="current-heading" className="mb-10">
-        <h2
-          id="current-heading"
-          className="font-display text-xl text-parchment"
-        >
+      <section aria-labelledby="current-heading" className="mb-16">
+        <h2 id="current-heading" className="sr-only">
           Your subscription
         </h2>
-        <div className="gold-rule my-4" />
 
         {mine.loading ? (
-          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-36 w-full" />
         ) : mine.error ? (
           <ErrorState error={mine.error} onRetry={mine.refetch} />
         ) : active ? (
-          <Panel className="p-5">
-            <div className="flex flex-wrap items-start justify-between gap-5">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-display text-xl text-gold-300">
-                    {active.plan.name}
-                  </h3>
-                  <Badge tone="success">{active.status_display}</Badge>
-                  {active.plan.is_all_access && (
-                    <Badge tone="gold">All access</Badge>
-                  )}
-                </div>
-                <p className="mt-2 text-sm text-white/60">
-                  {formatDaysRemaining(active.days_remaining)} · renews until{" "}
-                  {formatDate(active.end_date)}
-                </p>
-                {active.payment_reference && (
-                  <p className="mt-1 text-xs text-white/40">
-                    Payment reference: {active.payment_reference}
-                  </p>
+          <div className="navy-surface flex flex-col gap-6 rounded-[14px] p-8 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="cap !text-[#B4BED6]">Your subscription</span>
+                <span className="tag tag-ok">{active.status_display}</span>
+                {active.plan.is_all_access && (
+                  <span className="tag tag-gold">All courses</span>
                 )}
               </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Link to="/courses" className="btn btn-primary">
-                  Go to my courses
-                </Link>
-                <Button variant="ghost" onClick={handleCancel}>
-                  Cancel renewal
-                </Button>
-              </div>
+              <h3 className="h3">{active.plan.name}</h3>
+              <p className="text-[15px] text-[#B4BED6]">
+                {formatDaysRemaining(active.days_remaining)}, until{" "}
+                {formatDate(active.end_date)}
+              </p>
+              {active.payment_reference && (
+                <p className="mono cap !text-[#8E9AB8]">
+                  Ref {active.payment_reference}
+                </p>
+              )}
             </div>
-          </Panel>
+            <div className="flex flex-wrap gap-3">
+              <Link to="/courses" className="btn btn-gold">
+                Go to my courses
+              </Link>
+              <button
+                type="button"
+                className="btn btn-on-navy"
+                onClick={handleCancel}
+              >
+                Cancel renewal
+              </button>
+            </div>
+          </div>
         ) : (
-          <Panel>
-            <EmptyState
-              icon="lock"
-              title="No active subscription"
-              description={
-                mine.data?.history?.length
-                  ? "Your previous subscription has ended. Choose a plan below to restore access to your courses."
-                  : "Choose a plan below to unlock the full course library, quizzes and leaderboard."
-              }
-            />
-          </Panel>
+          <div className="rounded-[10px] bg-gold-tint px-5 py-4 text-[15px] text-[#4A3A00]">
+            <p className="font-medium text-[#0B1220]">No active subscription</p>
+            <p className="mt-1">
+              {mine.data?.history?.length
+                ? "Your previous subscription has ended. Choose a plan below to restore access to your courses."
+                : "Choose a plan below to unlock the full course library, quizzes and leaderboard."}
+            </p>
+          </div>
         )}
       </section>
 
       {/* ------------------------------------------------------------- Plans */}
-      <section aria-labelledby="plans-heading">
-        <h2 id="plans-heading" className="font-display text-xl text-parchment">
-          Available plans
-        </h2>
-        <p className="mt-1 text-sm text-white/55">
-          Prices are charged securely through Razorpay. Your card details never
-          touch our servers.
-        </p>
-        <div className="gold-rule my-4" />
+      <section aria-labelledby="plans-heading" className="mb-20">
+        <div className="flex flex-col gap-2 pb-8">
+          <h2 id="plans-heading" className="h2">
+            Choose how long you need.
+          </h2>
+          <p className="small">
+            Payments are processed by Razorpay. Your card details never touch
+            our servers.
+          </p>
+        </div>
 
         {plans.loading ? (
           <div className="grid gap-5 md:grid-cols-3">
             {Array.from({ length: 3 }).map((_, index) => (
-              <Skeleton key={index} className="h-72 w-full" />
+              <Skeleton key={index} className="h-80 w-full" />
             ))}
           </div>
         ) : plans.error ? (
@@ -194,57 +191,74 @@ export default function Subscription() {
           <div className="grid gap-5 md:grid-cols-3">
             {(plans.data || []).map((plan) => {
               const isCurrent = active?.plan?.id === plan.id;
+              const highlight = plan.is_featured;
+              const tick = highlight ? "text-[#5FCB9D]" : "text-ok";
               return (
-                <Panel
+                <div
                   key={plan.id}
-                  className={`flex flex-col p-6 ${plan.is_featured ? "border-gold-500" : ""}`}
+                  className={`flex flex-col gap-6 rounded-[14px] p-8 ${highlight ? "navy-surface" : "card"}`}
                 >
-                  {plan.is_featured && (
-                    <div className="mb-3">
-                      <Badge tone="gold">Most popular</Badge>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="h3">{plan.name}</h3>
+                      {highlight && (
+                        <span className="tag tag-gold">Most popular</span>
+                      )}
                     </div>
-                  )}
-
-                  <h3 className="font-display text-xl text-parchment">
-                    {plan.name}
-                  </h3>
-                  <p className="mt-2 flex-1 text-sm text-white/55">
-                    {plan.description}
-                  </p>
-
-                  <p className="mt-5 font-display text-3xl text-gold-300">
-                    {formatMoney(plan.price, plan.currency)}
-                  </p>
-                  <p className="mt-1 text-xs text-white/45">
-                    for {plan.duration_days} days
-                    {plan.is_all_access
-                      ? " · every published course"
-                      : ` · ${plan.course_count} course${plan.course_count === 1 ? "" : "s"}`}
-                  </p>
-
-                  <div className="mt-6">
-                    {isCurrent ? (
-                      <Button variant="ghost" disabled className="w-full">
-                        Current plan
-                      </Button>
-                    ) : (
-                      <Button
-                        className="w-full"
-                        loading={checkout.isBusy}
-                        onClick={() => handlePurchase(plan.slug)}
-                      >
-                        {active ? "Extend with this plan" : "Subscribe"}
-                      </Button>
-                    )}
+                    <span
+                      className={`text-sm ${highlight ? "text-[#B4BED6]" : "small"}`}
+                    >
+                      {plan.duration_days} days of access
+                    </span>
                   </div>
 
-                  {!plan.is_all_access && plan.course_slugs?.length > 0 && (
-                    <p className="mt-3 text-xs text-white/40">
-                      Includes: {plan.course_slugs.slice(0, 3).join(", ")}
-                      {plan.course_slugs.length > 3 ? " and more" : ""}
-                    </p>
+                  <span className="font-serif text-[52px] leading-none tracking-tight num">
+                    {formatPrice(plan.price, plan.currency)}
+                  </span>
+
+                  <ul
+                    className={`m-0 flex flex-1 list-none flex-col gap-3 border-t p-0 pt-6 text-[15px] ${highlight ? "border-white/[0.14] text-[#D5DBEA]" : "border-line text-ink2"}`}
+                  >
+                    <li className="flex gap-3">
+                      <Icon name="check" className={`i-sm mt-1 ${tick}`} />
+                      {plan.is_all_access
+                        ? "Every published course"
+                        : `${plan.course_count} course${plan.course_count === 1 ? "" : "s"} included`}
+                    </li>
+                    {plan.description && (
+                      <li className="flex gap-3">
+                        <Icon name="check" className={`i-sm mt-1 ${tick}`} />
+                        {plan.description}
+                      </li>
+                    )}
+                    {!plan.is_all_access && plan.course_slugs?.length > 0 && (
+                      <li className="cap !text-inherit opacity-80">
+                        Includes {plan.course_slugs.slice(0, 3).join(", ")}
+                        {plan.course_slugs.length > 3 ? " and more" : ""}
+                      </li>
+                    )}
+                  </ul>
+
+                  {isCurrent ? (
+                    <button
+                      type="button"
+                      className={`btn btn-lg btn-block ${highlight ? "btn-on-navy" : "btn-line"}`}
+                      disabled
+                    >
+                      Current plan
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`btn btn-lg btn-block ${highlight ? "btn-gold" : "btn-line"}`}
+                      disabled={checkout.isBusy}
+                      aria-busy={checkout.isBusy || undefined}
+                      onClick={() => handlePurchase(plan.slug)}
+                    >
+                      {active ? "Extend with this plan" : `Choose ${plan.name}`}
+                    </button>
                   )}
-                </Panel>
+                </div>
               );
             })}
           </div>
@@ -258,66 +272,52 @@ export default function Subscription() {
       </section>
 
       {/* --------------------------------------------------------- History */}
-      <section aria-labelledby="history-heading" className="mt-12">
-        <h2
-          id="history-heading"
-          className="font-display text-xl text-parchment"
-        >
+      <section aria-labelledby="history-heading" className="mb-16">
+        <h2 id="history-heading" className="h3 pb-4">
           Payment history
         </h2>
-        <div className="gold-rule my-4" />
 
         {payments.loading ? (
           <Skeleton className="h-32 w-full" />
         ) : (payments.data?.results || []).length === 0 ? (
-          <Panel className="p-6 text-sm text-white/55">
+          <p className="small border-y border-line py-6">
             No payments recorded yet.
-          </Panel>
+          </p>
         ) : (
-          <Panel className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
-                <tr>
-                  <th scope="col" className="px-4 py-3">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[480px] border-collapse text-[15px]">
+              <thead>
+                <tr className="border-b border-line-strong text-left text-[13px] text-ink3">
+                  <th scope="col" className="pb-3 font-medium">
                     Date
                   </th>
-                  <th scope="col" className="px-4 py-3">
+                  <th scope="col" className="pb-3 font-medium">
                     Plan
                   </th>
-                  <th scope="col" className="px-4 py-3">
+                  <th scope="col" className="pb-3 text-right font-medium">
                     Amount
                   </th>
-                  <th scope="col" className="px-4 py-3">
+                  <th scope="col" className="w-32 pb-3 text-right font-medium">
                     Status
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody>
                 {(payments.data?.results || []).map((payment) => (
-                  <tr key={payment.id}>
-                    <td className="whitespace-nowrap px-4 py-3 text-white/70">
+                  <tr key={payment.id} className="border-b border-line">
+                    <td className="small whitespace-nowrap py-[18px] pr-4">
                       {formatDate(payment.created_at)}
                     </td>
-                    <td className="px-4 py-3 text-white/80">
-                      {payment.plan_name}
-                    </td>
-                    <td className="px-4 py-3 text-white/80">
+                    <td className="pr-4">{payment.plan_name}</td>
+                    <td className="mono text-right">
                       {formatMoney(payment.amount, payment.currency)}
                     </td>
-                    <td className="px-4 py-3">
-                      <Badge
-                        tone={
-                          payment.status === "captured"
-                            ? "success"
-                            : payment.status === "failed"
-                              ? "danger"
-                              : "muted"
-                        }
-                      >
+                    <td className="text-right">
+                      <span className={`tag ${statusTag(payment.status)}`}>
                         {payment.status_display}
-                      </Badge>
+                      </span>
                       {payment.failure_reason && (
-                        <span className="mt-1 block text-xs text-red-300/80">
+                        <span className="mt-1 block text-[13px] text-bad">
                           {payment.failure_reason}
                         </span>
                       )}
@@ -326,60 +326,48 @@ export default function Subscription() {
                 ))}
               </tbody>
             </table>
-          </Panel>
+          </div>
         )}
       </section>
 
       {/* ------------------------------------------------- Previous terms */}
       {(mine.data?.history || []).length > 0 && (
-        <section aria-labelledby="terms-heading" className="mt-12">
-          <h2
-            id="terms-heading"
-            className="font-display text-xl text-parchment"
-          >
+        <section aria-labelledby="terms-heading">
+          <h2 id="terms-heading" className="h3 pb-4">
             Subscription history
           </h2>
-          <div className="gold-rule my-4" />
-          <Panel className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
-                <tr>
-                  <th scope="col" className="px-4 py-3">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[480px] border-collapse text-[15px]">
+              <thead>
+                <tr className="border-b border-line-strong text-left text-[13px] text-ink3">
+                  <th scope="col" className="pb-3 font-medium">
                     Plan
                   </th>
-                  <th scope="col" className="px-4 py-3">
+                  <th scope="col" className="pb-3 font-medium">
                     Period
                   </th>
-                  <th scope="col" className="px-4 py-3">
+                  <th scope="col" className="w-32 pb-3 text-right font-medium">
                     Status
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody>
                 {mine.data.history.map((row) => (
-                  <tr key={row.id}>
-                    <td className="px-4 py-3 text-white/80">{row.plan.name}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-white/65">
-                      {formatDate(row.start_date)} — {formatDate(row.end_date)}
+                  <tr key={row.id} className="border-b border-line">
+                    <td className="py-[18px] pr-4">{row.plan.name}</td>
+                    <td className="small whitespace-nowrap pr-4">
+                      {formatDate(row.start_date)} to {formatDate(row.end_date)}
                     </td>
-                    <td className="px-4 py-3">
-                      <Badge
-                        tone={
-                          row.status === "active"
-                            ? "success"
-                            : row.status === "failed"
-                              ? "danger"
-                              : "muted"
-                        }
-                      >
+                    <td className="text-right">
+                      <span className={`tag ${statusTag(row.status)}`}>
                         {row.status_display}
-                      </Badge>
+                      </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </Panel>
+          </div>
         </section>
       )}
     </div>

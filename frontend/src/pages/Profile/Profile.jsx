@@ -1,13 +1,10 @@
 import { useState } from "react";
 
-import { PageHeader } from "../../components/Layout";
 import {
   Avatar,
-  Badge,
   Button,
   Callout,
   ErrorState,
-  Panel,
   TextField,
 } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
@@ -149,15 +146,13 @@ export default function Profile() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:py-10">
-      <PageHeader
-        title="Your profile"
-        description="Keep your details current so course notifications reach you."
-        breadcrumbs={[
-          { label: "Dashboard", to: "/dashboard" },
-          { label: "Profile" },
-        ]}
-      />
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="flex flex-col gap-3 pb-10">
+        <h1 className="d2">Your profile</h1>
+        <p className="body max-w-[560px]">
+          Keep your details current so course notifications reach you.
+        </p>
+      </div>
 
       {generalError && (
         <div className="mb-6">
@@ -165,23 +160,23 @@ export default function Profile() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr] lg:items-start">
+      <div className="grid gap-12 lg:grid-cols-[320px_minmax(0,1fr)] lg:items-start lg:gap-16">
         {/* --------------------------------------------------------- Identity */}
-        <Panel className="p-5">
-          <div className="flex flex-col items-center gap-3 text-center">
-            <Avatar user={user} size={96} />
+        <section className="flex flex-col" aria-label="Account">
+          <div className="flex flex-col items-start gap-4">
+            <Avatar user={user} size={88} />
             <div>
-              <p className="font-display text-lg text-parchment">
-                {user?.name}
-              </p>
-              <p className="text-sm text-white/50">{user?.email}</p>
+              <p className="h3 !text-[28px]">{user?.name}</p>
+              <p className="small mt-1">{user?.email}</p>
             </div>
-            <Badge tone="gold">{user?.role}</Badge>
-            {user?.is_email_verified ? (
-              <Badge tone="success">Email verified</Badge>
-            ) : (
-              <Badge tone="warning">Email not verified</Badge>
-            )}
+            <div className="flex flex-wrap gap-2">
+              <span className="tag tag-gold">{user?.role_display || user?.role}</span>
+              {user?.is_email_verified ? (
+                <span className="tag tag-ok">Email verified</span>
+              ) : (
+                <span className="tag">Email not verified</span>
+              )}
+            </div>
           </div>
 
           <div className="mt-5">
@@ -193,34 +188,30 @@ export default function Profile() {
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif"
               onChange={handleAvatar}
-              className="block w-full text-sm text-white/60 file:mr-3 file:rounded-full file:border-0 file:bg-gold-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-black"
+              className="block w-full text-sm text-ink3 file:mr-3 file:h-11 file:cursor-pointer file:rounded-lg file:border-0 file:bg-gold file:px-5 file:text-[15px] file:font-medium file:text-on-gold"
             />
-            <p className="mt-1 text-xs text-white/40">
-              PNG, JPEG, WebP or GIF. Maximum 5 MB.
-            </p>
+            <p className="cap mt-2">PNG, JPEG, WebP or GIF. Maximum 5 MB.</p>
           </div>
 
-          <dl className="mt-6 space-y-2 border-t border-[var(--color-border-subtle)] pt-4 text-sm">
-            <div className="flex justify-between gap-3">
-              <dt className="text-white/45">Member since</dt>
-              <dd className="text-white/75">{formatDate(user?.date_joined)}</dd>
+          <dl className="m-0 mt-6 flex flex-col border-t border-line text-[15px]">
+            <div className="flex justify-between gap-3 border-b border-line py-3">
+              <dt className="text-ink3">Member since</dt>
+              <dd className="m-0">{formatDate(user?.date_joined)}</dd>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-white/45">Account type</dt>
-              <dd className="text-white/75">
-                {user?.role_display || user?.role}
-              </dd>
+            <div className="flex justify-between gap-3 border-b border-line py-3">
+              <dt className="text-ink3">Account type</dt>
+              <dd className="m-0">{user?.role_display || user?.role}</dd>
             </div>
           </dl>
-        </Panel>
+        </section>
 
-        <div className="space-y-6">
+        <div className="flex flex-col gap-14">
           {/* -------------------------------------------------------- Details */}
-          <Panel className="p-5">
-            <h2 className="font-display text-lg text-parchment">
+          <section aria-labelledby="details-heading">
+            <h2 id="details-heading" className="h3 border-b border-line-strong pb-4">
               Personal details
             </h2>
-            <div className="gold-rule my-4" />
+            <div className="h-6" />
 
             <form onSubmit={saveDetails} noValidate className="space-y-4">
               <TextField
@@ -299,16 +290,18 @@ export default function Profile() {
                 hint="Shown on your instructor profile if you teach."
               />
 
-              <Button type="submit" loading={savingDetails}>
+              <Button type="submit" loading={savingDetails} className="btn-lg">
                 Save changes
               </Button>
             </form>
-          </Panel>
+          </section>
 
           {/* ------------------------------------------------------- Password */}
-          <Panel className="p-5">
-            <h2 className="font-display text-lg text-parchment">Password</h2>
-            <div className="gold-rule my-4" />
+          <section aria-labelledby="password-heading">
+            <h2 id="password-heading" className="h3 border-b border-line-strong pb-4">
+              Password
+            </h2>
+            <div className="h-6" />
 
             <form onSubmit={savePassword} noValidate className="space-y-4">
               <TextField
@@ -368,11 +361,11 @@ export default function Profile() {
                 device.
               </Callout>
 
-              <Button type="submit" loading={savingPassword}>
+              <Button type="submit" loading={savingPassword} className="btn-lg">
                 Change password
               </Button>
             </form>
-          </Panel>
+          </section>
         </div>
       </div>
     </div>

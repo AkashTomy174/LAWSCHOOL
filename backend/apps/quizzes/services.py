@@ -13,6 +13,7 @@ Attempt flow::
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -33,6 +34,20 @@ from apps.quizzes.models import (
 from apps.subscriptions.services import can_user_access_course
 
 logger = get_logger(__name__)
+
+# Network latency allowance on top of a quiz's time limit.
+_TIME_LIMIT_GRACE_SECONDS = 30
+
+
+def is_past_time_limit(attempt: QuizAttempt) -> bool:
+    """True when a timed attempt is older than its limit (plus grace)."""
+    limit = attempt.quiz.time_limit_minutes
+    if not limit:
+        return False
+    deadline = attempt.started_at + timedelta(
+        minutes=limit, seconds=_TIME_LIMIT_GRACE_SECONDS
+    )
+    return timezone.now() > deadline
 
 
 def _locked_course_message(course, decision) -> dict:
@@ -100,8 +115,13 @@ def start_attempt(*, user, quiz: Quiz, ip_address: str | None = None) -> QuizAtt
         .order_by("-attempt_number")
         .first()
     )
-    if existing is not None:
+    if existing is not None and not is_past_time_limit(existing):
         return existing
+    if existing is not None:
+        # The timer ran out on an attempt that was never submitted: close it with
+        # no answers (it counts as used) and re-check the attempt limit.
+        submit_attempt(attempt=existing, answers={})
+        can_attempt_quiz(user, quiz)
 
     last_number = (
         QuizAttempt.objects.filter(user=user, quiz=quiz)
@@ -262,6 +282,15 @@ def submit_attempt(
             {"detail": "More answers submitted than the quiz has questions."},
             code="invalid_submission",
         )
+
+    if is_past_time_limit(attempt):
+        # Answers arriving after the deadline are not graded; otherwise the time
+        # limit is advisory and the quiz becomes open-book.
+        logger.warning(
+            "Late quiz submission graded as unanswered",
+            extra={"attempt_id": str(attempt.pk)},
+        )
+        answers = {}
 
     score, max_score, results = grade_submission(attempt=attempt, answers=answers)
     percentage = (

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import AuthLayout from "../../components/AuthLayout";
 import { Button, Callout, Panel, TextField } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -76,24 +77,23 @@ export default function Register() {
 
   const strengthLabels = ["Too weak", "Weak", "Fair", "Good", "Strong"];
   const strengthTones = [
-    "bg-red-500/70",
-    "bg-red-500/70",
-    "bg-amber-500/70",
-    "bg-emerald-500/70",
-    "bg-emerald-500",
+    "bg-bad",
+    "bg-bad",
+    "bg-gold",
+    "bg-ok",
+    "bg-ok",
   ];
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 py-12">
-      <Panel className="p-6 sm:p-8">
-        <h1 className="font-display text-2xl text-parchment">
+    <AuthLayout>
+        <h1 className="h2 !text-[38px]">
           Create your account
         </h1>
-        <p className="mt-2 text-sm text-white/55">
+        <p className="body mt-3">
           Preview lessons for free. Upgrade whenever you are ready.
         </p>
 
-        <div className="gold-rule my-6" />
+        <div className="h-7" />
 
         {generalError && (
           <div className="mb-5">
@@ -161,12 +161,12 @@ export default function Register() {
                       className={`h-1 flex-1 rounded-full ${
                         index < strength.score
                           ? strengthTones[strength.score]
-                          : "bg-white/10"
+                          : "bg-sunken"
                       }`}
                     />
                   ))}
                 </div>
-                <p className="mt-1 text-xs text-white/50">
+                <p className="mt-1 text-xs text-ink3">
                   Strength: {strengthLabels[strength.score]}
                   {strength.problems[0] ? ` — ${strength.problems[0]}` : ""}
                 </p>
@@ -186,18 +186,17 @@ export default function Register() {
             placeholder="Repeat your password"
           />
 
-          <Button type="submit" loading={submitting} className="w-full">
+          <Button type="submit" loading={submitting} className="btn-lg btn-block">
             {submitting ? "Creating account…" : "Create account"}
           </Button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-white/55">
+        <p className="mt-6 text-center text-sm text-ink3">
           Already have an account?{" "}
-          <Link to="/login" className="text-gold-300 hover:underline">
+          <Link to="/login" className="text-gold-ink hover:underline">
             Sign in
           </Link>
         </p>
-      </Panel>
-    </div>
+    </AuthLayout>
   );
 }

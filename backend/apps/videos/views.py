@@ -12,10 +12,15 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.core.logging import get_logger
-from apps.core.permissions import IsInstructorOrAdmin, is_admin, is_schema_generation
+from apps.core.permissions import (
+    IsAdminRole,
+    IsInstructorOrAdmin,
+    is_admin,
+    is_schema_generation,
+)
 from apps.core.exceptions import EntitlementError
 from apps.courses.models import Lesson
-from apps.subscriptions.services import can_user_access_lesson
+from apps.subscriptions.services import can_user_access_lesson, can_user_access_video
 from apps.videos.models import Video, VideoProgress
 from apps.videos.serializers import (
     PlaybackRequestSerializer,
@@ -61,7 +66,11 @@ class VideoDetailView(generics.RetrieveAPIView):
     queryset = Video.objects.select_related("lesson")
 
     def get_object(self):
-        return get_object_or_404(self.get_queryset(), playback_uid=self.kwargs["uid"])
+        video = get_object_or_404(self.get_queryset(), playback_uid=self.kwargs["uid"])
+        decision = can_user_access_video(self.request.user, video)
+        if not decision.allowed:
+            raise EntitlementError({"detail": decision.detail}, code=decision.reason)
+        return video
 
 
 class VideoPlaybackView(APIView):
@@ -245,11 +254,12 @@ class CourseProgressView(APIView):
 class VideoRegisterView(APIView):
     """POST /api/v1/videos/register/ -- bind a Cloudflare asset to a lesson.
 
-    The instructor uploads straight to Cloudflare (``upload-url`` below) so large
-    files never touch the Django server or database.
+    Admin-only: video editing is not an instructor capability.  The admin uploads
+    straight to Cloudflare (``upload-url`` below) so large files never touch the
+    Django server or database.
     """
 
-    permission_classes = [IsInstructorOrAdmin]
+    permission_classes = [IsAdminRole]
 
     @extend_schema(
         request=RegisterVideoSerializer, responses={201: VideoAdminSerializer}
@@ -260,9 +270,6 @@ class VideoRegisterView(APIView):
         data = serializer.validated_data
 
         lesson = data.pop("lesson", None)
-        if lesson is not None:
-            self.check_object_permissions(request, lesson.section.course)
-
         video = register_video(
             title=data["title"],
             cloudflare_video_id=data["cloudflare_video_id"],
@@ -283,10 +290,10 @@ class DirectUploadURLView(APIView):
     """POST /api/v1/videos/upload-url/ -- one-time Cloudflare direct-upload URL.
 
     Returns a URL the browser posts the file to directly.  Keeps multi-gigabyte
-    files away from the application server entirely.
+    files away from the application server entirely.  Admin-only.
     """
 
-    permission_classes = [IsInstructorOrAdmin]
+    permission_classes = [IsAdminRole]
 
     def post(self, request):
         from apps.videos.cloudflare import CloudflareStreamError, client
@@ -313,9 +320,9 @@ class DirectUploadURLView(APIView):
 
 
 class VideoSyncView(APIView):
-    """POST /api/v1/videos/<uid>/sync/ -- re-pull metadata from Cloudflare."""
+    """POST /api/v1/videos/<uid>/sync/ -- re-pull metadata from Cloudflare (admin)."""
 
-    permission_classes = [IsInstructorOrAdmin]
+    permission_classes = [IsAdminRole]
 
     def post(self, request, uid):
         from apps.videos.services import sync_video_metadata

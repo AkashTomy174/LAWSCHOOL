@@ -14,6 +14,7 @@ from rest_framework.permissions import BasePermission
 from apps.core.permissions import (
     IsCourseOwnerOrAdmin,
     IsInstructorOrAdmin,
+    client_ip,
     is_admin,
     is_schema_generation,
 )
@@ -48,13 +49,6 @@ class CanManageQuestionBank(BasePermission):
         if not (user and user.is_authenticated):
             return False
         return is_admin(request) or user.has_perm("quizzes.manage_question_bank")
-
-
-def _client_ip(request) -> str | None:
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
 
 
 # --------------------------------------------------------------------------- #
@@ -102,7 +96,7 @@ class QuizDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_permissions(self):
         if self.request.method in {"PATCH", "PUT", "DELETE"}:
-            return [IsInstructorOrAdmin()]
+            return [IsCourseOwnerOrAdmin()]
         return super().get_permissions()
 
     def get_serializer_class(self):
@@ -124,6 +118,14 @@ class QuizDetailView(generics.RetrieveUpdateDestroyAPIView):
             # Students only ever see published quizzes on published courses.
             queryset = queryset.filter(is_published=True, course__status="published")
         return queryset
+
+    def perform_update(self, serializer):
+        # Moving a quiz needs ownership of the destination course too.
+        if "course" in serializer.validated_data:
+            self.check_object_permissions(
+                self.request, serializer.validated_data["course"]
+            )
+        serializer.save()
 
 
 class SubjectListCreateView(generics.ListCreateAPIView):
@@ -208,6 +210,14 @@ class QuizSectionRuleDetailView(generics.RetrieveUpdateDestroyAPIView):
             queryset = queryset.filter(quiz__course__instructor=self.request.user)
         return queryset
 
+    def perform_update(self, serializer):
+        # Moving a rule needs ownership of the destination quiz's course too.
+        if "quiz" in serializer.validated_data:
+            self.check_object_permissions(
+                self.request, serializer.validated_data["quiz"].course
+            )
+        serializer.save()
+
 
 class OptionListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/v1/quizzes/options/?question=<uuid>.
@@ -250,7 +260,7 @@ class StartAttemptView(APIView):
             Quiz.objects.select_related("course").filter(is_published=True), pk=pk
         )
         attempt = services.start_attempt(
-            user=request.user, quiz=quiz, ip_address=_client_ip(request)
+            user=request.user, quiz=quiz, ip_address=client_ip(request)
         )
         quiz_payload = QuizDetailSerializer(quiz).data
         attempt_questions = attempt.attempt_questions.select_related(
@@ -360,8 +370,10 @@ class AttemptDetailView(APIView):
             pk=pk,
         )
         is_owner = attempt.user_id == request.user.pk
+        # Instructors only see attempts on quizzes in courses they own.
         is_staff = is_admin(request) or (
             getattr(request.user, "role", None) == "instructor"
+            and attempt.quiz.course.instructor_id == request.user.pk
         )
         if not (is_owner or is_staff):
             return Response(

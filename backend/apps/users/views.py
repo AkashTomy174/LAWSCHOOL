@@ -21,7 +21,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.core.logging import get_logger
-from apps.core.permissions import IsAdminRole, IsInstructorOrAdmin
+from apps.core.permissions import IsAdminRole
 from apps.users import services
 from apps.users.models import User
 from apps.users.serializers import (
@@ -268,14 +268,14 @@ class SessionHeartbeatView(APIView):
 
 
 class UserListView(generics.ListAPIView):
-    """GET /api/v1/users/ -- people directory for instructors/admins.
+    """GET /api/v1/users/ -- people directory for admins.
 
-    Students are *not* given a people-search endpoint; that would leak the whole
-    roster.  Only instructor/admin roles may list, and results are paginated.
+    Admin-only: the rows carry every user's email and phone, which no student or
+    instructor needs in bulk.
     """
 
     serializer_class = UserSerializer
-    permission_classes = [IsInstructorOrAdmin]
+    permission_classes = [IsAdminRole]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["role", "is_active"]
     search_fields = ["email", "name"]

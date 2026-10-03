@@ -19,6 +19,7 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+from freezegun import freeze_time
 
 from apps.videos.models import PlaybackSession, VideoProgress
 from apps.videos.services import (
@@ -364,11 +365,38 @@ class TestProgressValidation:
         self, jwt_client, student, lesson, active_subscription
     ):
         response = jwt_client(student).post(
-            progress_url(lesson.video), {"position_seconds": 300}, format="json"
+            progress_url(lesson.video), {"position_seconds": 30}, format="json"
         )
         assert response.status_code == 200
-        assert response.data["last_position"] == 300
-        assert float(response.data["completion_percentage"]) == 50.0
+        assert response.data["last_position"] == 30
+        assert float(response.data["completion_percentage"]) == 5.0
+        assert response.data["completed"] is False
+
+    def test_first_update_cannot_jump_to_the_end(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        """One request at the final second must not complete the lesson."""
+        response = jwt_client(student).post(
+            progress_url(lesson.video),
+            {"position_seconds": 600, "completed": True},
+            format="json",
+        )
+        assert response.data["last_position"] == 0
+        assert response.data["completed"] is False
+
+    def test_progress_cannot_outrun_the_wall_clock(
+        self, jwt_client, student, lesson, active_subscription
+    ):
+        """Stepping +30s in a tight loop gains almost nothing."""
+        client = jwt_client(student)
+        with freeze_time():
+            for position in range(30, 601, 30):
+                response = client.post(
+                    progress_url(lesson.video),
+                    {"position_seconds": position},
+                    format="json",
+                )
+        assert response.data["last_position"] == 30
         assert response.data["completed"] is False
 
     def test_cannot_report_position_beyond_video_duration(
@@ -379,8 +407,8 @@ class TestProgressValidation:
             progress_url(lesson.video), {"position_seconds": 6000}, format="json"
         )
         assert response.status_code == 200
-        # Clamped to the real duration (plus a small player-tolerance window).
-        assert response.data["last_position"] <= 600 + 5
+        # Clamped to the real duration, then refused as an impossible jump.
+        assert response.data["last_position"] == 0
 
     def test_cannot_jump_straight_to_the_end_for_a_substantial_advance(
         self, jwt_client, student, lesson, active_subscription
@@ -401,12 +429,12 @@ class TestProgressValidation:
     ):
         client = jwt_client(student)
         client.post(
-            progress_url(lesson.video), {"position_seconds": 300}, format="json"
+            progress_url(lesson.video), {"position_seconds": 30}, format="json"
         )
         response = client.post(
-            progress_url(lesson.video), {"position_seconds": 100}, format="json"
+            progress_url(lesson.video), {"position_seconds": 10}, format="json"
         )
-        assert response.data["last_position"] == 300
+        assert response.data["last_position"] == 30
 
     def test_negative_position_is_rejected(
         self, jwt_client, student, lesson, active_subscription
@@ -442,18 +470,21 @@ class TestProgressValidation:
         self, jwt_client, student, lesson, active_subscription
     ):
         client = jwt_client(student)
-        # Step forward in believable increments so the drift guard permits it.
-        for position in range(30, 601, 30):
-            client.post(
+        # Step forward in believable increments, with real time passing between
+        # heartbeats, so the drift and wall-clock guards permit it.
+        with freeze_time() as clock:
+            for position in range(30, 601, 30):
+                client.post(
+                    progress_url(lesson.video),
+                    {"position_seconds": position},
+                    format="json",
+                )
+                clock.tick(30)
+            response = client.post(
                 progress_url(lesson.video),
-                {"position_seconds": position},
+                {"position_seconds": 600, "completed": True},
                 format="json",
             )
-        response = client.post(
-            progress_url(lesson.video),
-            {"position_seconds": 600, "completed": True},
-            format="json",
-        )
         assert response.data["completed"] is True
         assert float(response.data["completion_percentage"]) == 100.0
 
@@ -486,15 +517,15 @@ class TestProgressValidation:
         client = jwt_client(student)
         client.post(
             progress_url(lesson.video),
-            {"position_seconds": 100, "watched_seconds": 100},
+            {"position_seconds": 30, "watched_seconds": 30},
             format="json",
         )
         response = client.post(
             progress_url(lesson.video),
-            {"position_seconds": 120, "watched_seconds": 10},
+            {"position_seconds": 35, "watched_seconds": 10},
             format="json",
         )
-        assert response.data["watched_seconds"] == 100
+        assert response.data["watched_seconds"] == 30
 
 
 class TestProgressServiceDirect:
@@ -509,9 +540,15 @@ class TestProgressServiceDirect:
     def test_service_completes_at_full_percentage(
         self, student, lesson, active_subscription
     ):
-        progress = update_video_progress(
-            user=student, video=lesson.video, position_seconds=595, completed=True
-        )
+        with freeze_time() as clock:
+            for position in range(30, 601, 30):
+                progress = update_video_progress(
+                    user=student, video=lesson.video, position_seconds=position
+                )
+                clock.tick(30)
+            progress = update_video_progress(
+                user=student, video=lesson.video, position_seconds=595, completed=True
+            )
         assert progress.completed is True
         assert progress.completed_at is not None
 
@@ -539,8 +576,13 @@ class TestProgressEndpoints:
     def test_course_progress_aggregates_correctly(
         self, jwt_client, student, course, lesson, active_subscription
     ):
-        update_video_progress(
-            user=student, video=lesson.video, position_seconds=600, completed=True
+        VideoProgress.objects.create(
+            user=student,
+            video=lesson.video,
+            lesson=lesson,
+            last_position=600,
+            completion_percentage=100,
+            completed=True,
         )
         response = jwt_client(student).get(f"/api/v1/progress/course/{course.slug}/")
         assert response.data["total_lessons"] == 1
@@ -564,10 +606,33 @@ class TestVideoAdminEndpoints:
         )
         assert response.status_code == 403
 
-    def test_instructor_cannot_register_a_duplicate_cloudflare_id(
+    def test_instructor_cannot_register_a_video(self, jwt_client, lesson):
+        """Video editing is admin-only -- even on the instructor's own lesson.
+
+        Regression: any instructor could swap the video on any lesson.
+        """
+        original = lesson.video_id
+        response = jwt_client(lesson.section.course.instructor).post(
+            "/api/v1/videos/register/",
+            {"title": "Swap", "cloudflare_video_id": "evil", "lesson": str(lesson.pk)},
+            format="json",
+        )
+        assert response.status_code == 403
+        lesson.refresh_from_db()
+        assert lesson.video_id == original
+
+    def test_instructor_cannot_request_an_upload_url_or_sync(
         self, jwt_client, instructor, lesson
     ):
-        response = jwt_client(instructor).post(
+        client = jwt_client(instructor)
+        assert client.post("/api/v1/videos/upload-url/").status_code == 403
+        sync_url = f"/api/v1/videos/{lesson.video.playback_uid}/sync/"
+        assert client.post(sync_url).status_code == 403
+
+    def test_duplicate_cloudflare_id_is_rejected(
+        self, jwt_client, admin_user, lesson
+    ):
+        response = jwt_client(admin_user).post(
             "/api/v1/videos/register/",
             {
                 "title": "Duplicate",

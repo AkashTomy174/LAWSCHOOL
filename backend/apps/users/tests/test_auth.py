@@ -472,9 +472,10 @@ class TestPermissionsByRole:
         response = jwt_client(student).get("/api/v1/users/")
         assert response.status_code == 403
 
-    def test_instructor_can_list_users(self, jwt_client, instructor):
+    def test_instructor_cannot_list_users(self, jwt_client, instructor):
+        """The directory exposes every email/phone; it is admin-only."""
         response = jwt_client(instructor).get("/api/v1/users/")
-        assert response.status_code == 200
+        assert response.status_code == 403
 
     def test_admin_can_list_users(self, jwt_client, admin_user):
         response = jwt_client(admin_user).get("/api/v1/users/")
@@ -488,7 +489,7 @@ class TestPermissionsByRole:
         )
         assert response.status_code == 403
 
-    def test_instructor_can_create_course(self, jwt_client, instructor):
+    def test_instructor_cannot_create_course(self, jwt_client, instructor):
         response = jwt_client(instructor).post(
             "/api/v1/courses/",
             {
@@ -499,10 +500,7 @@ class TestPermissionsByRole:
             },
             format="json",
         )
-        assert response.status_code == 201, response.data
-        from apps.courses.models import Course
-
-        assert Course.objects.get(title="Instructor Course").instructor == instructor
+        assert response.status_code == 403
 
     def test_student_cannot_access_admin_payment_list(self, jwt_client, student):
         response = jwt_client(student).get("/api/v1/payments/all/")
@@ -514,3 +512,54 @@ class TestPermissionsByRole:
 
     def test_unauthenticated_cannot_read_progress(self, api_client):
         assert api_client.get("/api/v1/progress/").status_code == 401
+
+
+class TestTokenSeparation:
+    def test_verification_token_cannot_reset_the_password(self, api_client, student):
+        """Regression: verification and reset shared one token generator."""
+        from urllib.parse import parse_qs, urlparse
+
+        from apps.users.services import build_email_verification_url
+
+        query = parse_qs(urlparse(build_email_verification_url(student)).query)
+        response = api_client.post(
+            "/api/v1/auth/password/reset/confirm/",
+            {
+                "uid": query["uid"][0],
+                "token": query["token"][0],
+                "new_password": "AttackerPass123!",
+                "new_password_confirm": "AttackerPass123!",
+            },
+            format="json",
+        )
+        assert response.status_code == 400
+        student.refresh_from_db()
+        assert not student.check_password("AttackerPass123!")
+
+    def test_verification_link_is_single_use(self, api_client, student):
+        from urllib.parse import parse_qs, urlparse
+
+        from apps.users.services import build_email_verification_url
+
+        query = parse_qs(urlparse(build_email_verification_url(student)).query)
+        body = {"uid": query["uid"][0], "token": query["token"][0]}
+        assert api_client.post("/api/v1/auth/verify-email/", body).status_code == 200
+        assert api_client.post("/api/v1/auth/verify-email/", body).status_code == 400
+
+
+class TestClientIdentity:
+    def test_forged_forwarded_for_is_not_trusted(self, rf):
+        """Only the hop our own proxy appended counts (NUM_PROXIES=1)."""
+        from apps.core.permissions import client_ip
+
+        request = rf.get(
+            "/", HTTP_X_FORWARDED_FOR="6.6.6.6, 198.51.100.4", REMOTE_ADDR="10.0.0.1"
+        )
+        assert client_ip(request) == "198.51.100.4"
+
+
+class TestLeaderboardLimit:
+    @pytest.mark.parametrize("limit", ["abc", "-5", "0"])
+    def test_bad_limit_does_not_crash(self, api_client, db, limit):
+        response = api_client.get(f"/api/v1/leaderboard/top/?limit={limit}")
+        assert response.status_code == 200

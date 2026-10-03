@@ -53,6 +53,12 @@ CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to send X-CSRFToken
 
 X_FRAME_OPTIONS = "DENY"
 
+# The OpenAPI schema maps every endpoint for an attacker; serve it to admins only.
+SPECTACULAR_SETTINGS = {  # noqa: F405
+    **SPECTACULAR_SETTINGS,  # noqa: F405
+    "SERVE_PERMISSIONS": ["apps.core.permissions.IsAdminRole"],
+}
+
 # --------------------------------------------------------------------------- #
 # Servers / hosts
 # --------------------------------------------------------------------------- #

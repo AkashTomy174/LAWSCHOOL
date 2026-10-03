@@ -1,15 +1,7 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "../../components/Layout";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorState,
-  Panel,
-  ProgressBar,
-  Skeleton,
-} from "../../components/ui";
+import Icon from "../../components/Icon";
+import { EmptyState, ErrorState, Skeleton } from "../../components/ui";
 import useAsync from "../../hooks/useAsync";
 import { quizService } from "../../services/quizService";
 import { formatDuration } from "../../utils/format";
@@ -34,26 +26,24 @@ export default function QuizResult() {
 
   if (!attemptId) {
     return (
-      <div className="mx-auto w-full max-w-2xl px-4 py-16">
-        <Panel>
-          <EmptyState
-            title="No attempt selected"
-            description="Open a quiz result from your dashboard to see the review."
-            action={
-              <Link to="/dashboard" className="btn btn-primary">
-                Back to dashboard
-              </Link>
-            }
-          />
-        </Panel>
+      <div className="wrap max-w-2xl py-16">
+        <EmptyState
+          title="No attempt selected"
+          description="Open a quiz result from your dashboard to see the review."
+          action={
+            <Link to="/dashboard" className="btn btn-gold">
+              Back to dashboard
+            </Link>
+          }
+        />
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-3xl px-4 py-10">
-        <Skeleton className="h-36 w-full" />
+      <div className="wrap max-w-3xl py-12">
+        <Skeleton className="h-48 w-full" />
         <Skeleton className="mt-5 h-64 w-full" />
       </div>
     );
@@ -61,7 +51,7 @@ export default function QuizResult() {
 
   if (error) {
     return (
-      <div className="mx-auto w-full max-w-2xl px-4 py-16">
+      <div className="wrap max-w-2xl py-16">
         <ErrorState error={error} onRetry={refetch} />
       </div>
     );
@@ -71,127 +61,135 @@ export default function QuizResult() {
 
   const { attempt, review = [] } = data;
   const correctCount = review.filter((row) => row.is_correct).length;
+  const percent = Math.round(Number(attempt.percentage) || 0);
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:py-10">
-      <PageHeader
-        title="Quiz result"
-        description={attempt.quiz_title}
-        breadcrumbs={[
-          { label: "Dashboard", to: "/dashboard" },
-          { label: "Quiz", to: `/quiz/${quizId}` },
-          { label: "Result" },
-        ]}
-      />
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="max-w-[860px]">
+      <nav aria-label="Breadcrumb" className="small flex items-center gap-2 pb-8">
+        <Link to="/dashboard" className="underline underline-offset-[3px] hover:text-ink">
+          Dashboard
+        </Link>
+        <Icon name="caretRight" className="i-sm" />
+        <span className="text-ink2" aria-current="page">
+          Quiz result
+        </span>
+      </nav>
 
       {/* -------------------------------------------------------- Score summary */}
-      <Panel className="p-6">
-        <div className="flex flex-wrap items-center justify-between gap-6">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-white/45">
-              Your score
-            </p>
-            <p className="mt-1 font-display text-4xl text-gold-300">
+      <section
+        aria-label="Your result"
+        className="navy-surface flex flex-col gap-8 rounded-[14px] p-8 sm:p-10"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-col gap-2">
+            <span className="cap !text-[#B4BED6]">{attempt.quiz_title}</span>
+            <h1 className="d2 !text-[64px] !leading-none sm:!text-[88px]">
               {attempt.score}
-              <span className="text-xl text-white/40">
-                /{attempt.max_score}
+              <span className="text-[0.4em] text-[#8E9AB8]">
+                {" "}
+                / {attempt.max_score}
               </span>
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Badge tone={attempt.passed ? "success" : "danger"}>
-                {attempt.passed ? "Passed" : "Not passed"}
-              </Badge>
-              <Badge tone="muted">Pass mark {attempt.pass_percentage}%</Badge>
-              <Badge tone="muted">Attempt {attempt.attempt_number}</Badge>
-            </div>
+            </h1>
           </div>
-
-          <div className="min-w-[180px] flex-1">
-            <ProgressBar
-              value={attempt.percentage}
-              label={`${Math.round(Number(attempt.percentage))}% scored`}
-            />
-            <p className="mt-3 text-xs text-white/45">
-              {correctCount} of {review.length} question
-              {review.length === 1 ? "" : "s"} correct
-              {attempt.duration_seconds > 0 &&
-                ` · completed in ${formatDuration(attempt.duration_seconds)}`}
-            </p>
+          <div className="flex flex-wrap gap-2">
+            <span className={`tag ${attempt.passed ? "tag-ok" : "tag-bad"}`}>
+              {attempt.passed ? "Passed" : "Not passed"}
+            </span>
+            <span className="tag !bg-white/10 !text-[#B4BED6]">
+              Pass mark {attempt.pass_percentage}%
+            </span>
+            <span className="tag !bg-white/10 !text-[#B4BED6]">
+              Attempt {attempt.attempt_number}
+            </span>
           </div>
         </div>
 
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link to={`/quiz/${quizId}`} className="btn btn-primary">
+        <div className="flex flex-col gap-2">
+          <div
+            className="h-1.5 overflow-hidden rounded-[3px] bg-white/[0.16]"
+            role="progressbar"
+            aria-label="Score"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          >
+            <i
+              className="block h-full bg-[#C9A227]"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <span className="cap !text-[#B4BED6]">
+            {percent}% scored, {correctCount} of {review.length} question
+            {review.length === 1 ? "" : "s"} correct
+            {attempt.duration_seconds > 0 &&
+              `, completed in ${formatDuration(attempt.duration_seconds)}`}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Link to={`/quiz/${quizId}`} className="btn btn-gold">
             {attempt.passed ? "Try again" : "Retake quiz"}
           </Link>
-          <Link to="/dashboard" className="btn btn-ghost">
+          <Link to="/dashboard" className="btn btn-on-navy">
             Back to dashboard
           </Link>
-          <Link to="/leaderboard" className="btn btn-ghost">
+          <Link to="/leaderboard" className="btn btn-on-navy">
             See leaderboard
           </Link>
         </div>
-      </Panel>
+      </section>
 
       {/* --------------------------------------------------------------- Review */}
-      {review.length > 0 && (
-        <section className="mt-8" aria-labelledby="review-heading">
-          <h2
-            id="review-heading"
-            className="font-display text-xl text-parchment"
-          >
-            Answer review
-          </h2>
-          <p className="mt-1 text-sm text-white/55">
-            Correct answers are revealed now that your attempt has been graded.
-          </p>
-          <div className="gold-rule my-4" />
+      {review.length > 0 ? (
+        <section className="pt-14" aria-labelledby="review-heading">
+          <div className="flex flex-col gap-2 pb-6">
+            <h2 id="review-heading" className="h3">
+              Answer review
+            </h2>
+            <p className="small">
+              Correct answers are revealed now that your attempt has been graded.
+            </p>
+          </div>
 
-          <ol className="space-y-4">
+          <ol className="rows m-0 flex list-none flex-col border-t border-line-strong p-0">
             {review.map((row, index) => (
-              <li key={row.question_id}>
-                <Panel className="p-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <p className="font-medium text-parchment">
-                      <span className="mr-2 text-gold-500" aria-hidden="true">
-                        {String(index + 1).padStart(2, "0")}.
-                      </span>
-                      {row.question_text}
-                    </p>
-                    <Badge tone={row.is_correct ? "success" : "danger"}>
-                      {row.is_correct ? "Correct" : "Incorrect"}
-                    </Badge>
-                  </div>
-
-                  <p className="mt-3 text-xs text-white/50">
-                    {row.marks_awarded} of {row.marks_possible} mark
-                    {row.marks_possible === 1 ? "" : "s"} awarded
+              <li key={row.question_id} className="flex flex-col gap-4 py-7">
+                <div className="flex items-start justify-between gap-4">
+                  <p className="flex gap-4 text-[17px] leading-snug">
+                    <span className="mono cap pt-1">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span>{row.question_text}</span>
                   </p>
+                  <span
+                    className={`tag flex-none ${row.is_correct ? "tag-ok" : "tag-bad"}`}
+                  >
+                    {row.is_correct ? "Correct" : "Incorrect"}
+                  </span>
+                </div>
 
-                  {row.explanation && (
-                    <div className="mt-4 rounded-lg border border-[var(--color-border-subtle)] bg-white/[0.03] px-4 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gold-300">
-                        Explanation
-                      </p>
-                      <p className="mt-1 text-sm text-white/70">
-                        {row.explanation}
-                      </p>
-                    </div>
-                  )}
-                </Panel>
+                <p className="cap pl-[34px]">
+                  {row.marks_awarded} of {row.marks_possible} mark
+                  {row.marks_possible === 1 ? "" : "s"} awarded
+                </p>
+
+                {row.explanation && (
+                  <div className="ml-[34px] rounded-[10px] border border-line bg-sunken px-5 py-4">
+                    <p className="cap font-medium !text-gold-ink">Explanation</p>
+                    <p className="body mt-1 !text-[15px]">{row.explanation}</p>
+                  </div>
+                )}
               </li>
             ))}
           </ol>
         </section>
+      ) : (
+        <p className="small border-y border-line py-6 mt-10 text-center">
+          The detailed review is not available for this attempt.
+        </p>
       )}
-
-      {review.length === 0 && (
-        <div className="mt-8">
-          <Panel className="p-6 text-center text-sm text-white/60">
-            The detailed review is not available for this attempt.
-          </Panel>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -196,6 +196,10 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.core.exceptions.lawschool_exception_handler",
     "DEFAULT_THROTTLE_CLASSES": ("rest_framework.throttling.ScopedRateThrottle",),
+    # Reverse proxies in front of the app (Railway edge = 1).  Unset, DRF keys
+    # throttles on the whole client-supplied X-Forwarded-For header, so a
+    # forged header per request would bypass every rate limit.
+    "NUM_PROXIES": int(env("NUM_PROXIES", "1")),
     "DEFAULT_THROTTLE_RATES": {
         "auth": "10/min",
         "payment": "30/min",

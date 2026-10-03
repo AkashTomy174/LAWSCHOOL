@@ -1,103 +1,113 @@
 import { Link } from "react-router-dom";
 
-import { PageHeader } from "../../components/Layout";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorState,
-  Panel,
-  ProgressBar,
-  Skeleton,
-} from "../../components/ui";
+import { EmptyState, ErrorState, Skeleton } from "../../components/ui";
 import { useUI } from "../../context/UIContext";
 import useAsync from "../../hooks/useAsync";
 import { notificationService } from "../../services/quizService";
 import videoService from "../../services/videoService";
-import { formatRelative } from "../../utils/format";
+import { formatDuration, formatRelative } from "../../utils/format";
+
+/** Page title block shared by the two pages in this file. */
+function PageTitle({ title, description, action }) {
+  return (
+    <div className="flex flex-col justify-between gap-6 pb-10 md:flex-row md:items-end">
+      <div className="flex flex-col gap-3">
+        <h1 className="d2">{title}</h1>
+        <p className="body max-w-[560px]">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
 
 /**
  * Progress overview.
  *
  * One paginated request for progress rows plus one per course summary would be N+1
- * requests, so instead the page uses the course list (which already carries
- * `progress_percentage`) for the per-course bars and the progress endpoint only for
- * the recent-activity list. Two requests total, regardless of course count.
+ * requests, so instead the page uses the progress endpoint for the recent-activity
+ * list only. Per-course bars live on the dashboard, which reads the course list.
  */
 export function Progress() {
   const recent = useAsync(() => videoService.myProgress({ page_size: 20 }), []);
+  const rows = recent.data?.results || [];
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-10">
-      <PageHeader
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="max-w-[960px]">
+      <PageTitle
         title="Your progress"
-        description="Every completed lesson, with the furthest position reached."
-        breadcrumbs={[
-          { label: "Dashboard", to: "/dashboard" },
-          { label: "Progress" },
-        ]}
+        description="Every lesson you have opened, with the furthest position reached."
       />
 
       {recent.loading ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {Array.from({ length: 6 }).map((_, index) => (
             <Skeleton key={index} className="h-20 w-full" />
           ))}
         </div>
       ) : recent.error ? (
         <ErrorState error={recent.error} onRetry={recent.refetch} />
-      ) : (recent.data?.results || []).length === 0 ? (
-        <Panel>
+      ) : rows.length === 0 ? (
+        <div className="border-y border-line">
           <EmptyState
-            icon="chart"
             title="No playback recorded yet"
             description="Open a lesson and your progress will appear here automatically."
             action={
-              <Link to="/courses" className="btn btn-primary">
+              <Link to="/courses" className="btn btn-gold">
                 Browse courses
               </Link>
             }
           />
-        </Panel>
+        </div>
       ) : (
-        <ul className="space-y-3">
-          {recent.data.results.map((row) => (
-            <li key={row.id}>
-              <Panel className="p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Link
-                      to={`/watch/${row.lesson_id}`}
-                      className="truncate text-sm text-parchment hover:text-gold-300"
+        <ul className="rows m-0 flex list-none flex-col border-t border-line-strong p-0">
+          {rows.map((row) => {
+            const percent = Math.round(Number(row.completion_percentage) || 0);
+            return (
+              <li key={row.id}>
+                <Link
+                  to={`/watch/${row.lesson_id}`}
+                  className="flex flex-col gap-3 py-6 sm:flex-row sm:items-center sm:gap-6"
+                >
+                  <span className="flex min-w-0 flex-1 flex-col gap-2">
+                    <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="text-[17px] font-medium">
+                        {row.completed ? "Review lesson" : "Resume lesson"}
+                      </span>
+                      <span className="cap">
+                        Updated {formatRelative(row.updated_at)}, at{" "}
+                        <span className="mono">
+                          {formatDuration(row.last_position)}
+                        </span>
+                      </span>
+                    </span>
+                    <span
+                      className="bar"
+                      role="progressbar"
+                      aria-label="Lesson progress"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percent}
                     >
-                      Resume lesson
-                    </Link>
-                    <p className="mt-0.5 text-xs text-white/45">
-                      Updated {formatRelative(row.updated_at)} · position{" "}
-                      {Math.round(row.last_position)}s
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    {row.completed ? (
-                      <Badge tone="success">Completed</Badge>
-                    ) : (
-                      <Badge tone="muted">
-                        {Math.round(Number(row.completion_percentage))}%
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                <ProgressBar
-                  value={row.completion_percentage}
-                  className="mt-3"
-                />
-              </Panel>
-            </li>
-          ))}
+                      <i style={{ width: `${percent}%` }} />
+                    </span>
+                  </span>
+                  {row.completed ? (
+                    <span className="tag tag-ok self-start sm:self-center">
+                      Completed
+                    </span>
+                  ) : (
+                    <span className="mono w-14 text-right font-medium">
+                      {percent}%
+                    </span>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
+      </div>
     </div>
   );
 }
@@ -149,25 +159,22 @@ export function Notifications() {
   const unread = items.filter((row) => !row.is_read).length;
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:py-10">
-      <PageHeader
+    <div className="wrap pb-24 pt-12 lg:pt-16">
+      <div className="max-w-[860px]">
+      <PageTitle
         title="Notifications"
         description="Payment receipts, subscription reminders and quiz results."
-        breadcrumbs={[
-          { label: "Dashboard", to: "/dashboard" },
-          { label: "Notifications" },
-        ]}
-        actions={
+        action={
           unread > 0 && (
-            <Button variant="ghost" onClick={markAllRead}>
+            <button type="button" className="btn btn-line" onClick={markAllRead}>
               Mark all read
-            </Button>
+            </button>
           )
         }
       />
 
       {loading ? (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {Array.from({ length: 5 }).map((_, index) => (
             <Skeleton key={index} className="h-20 w-full" />
           ))}
@@ -175,56 +182,52 @@ export function Notifications() {
       ) : error ? (
         <ErrorState error={error} onRetry={refetch} />
       ) : items.length === 0 ? (
-        <Panel>
+        <div className="border-y border-line">
           <EmptyState
             title="Nothing to show"
             description="Payment receipts and course updates will appear here."
           />
-        </Panel>
+        </div>
       ) : (
-        <ul className="space-y-3">
+        <ul className="rows m-0 flex list-none flex-col border-t border-line-strong p-0">
           {items.map((item) => (
-            <li key={item.id}>
-              <Panel
-                className={`p-4 ${item.is_read ? "" : "border-gold-500/40"}`}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium text-parchment">{item.title}</p>
-                      {!item.is_read && <Badge tone="gold">New</Badge>}
-                    </div>
-                    <p className="mt-1 text-sm text-white/65">{item.body}</p>
-                    <p className="mt-2 text-xs text-white/40">
-                      {formatRelative(item.created_at)}
-                    </p>
-                  </div>
-
-                  <div className="flex shrink-0 flex-col items-end gap-2">
-                    {item.action_url && (
-                      <Link
-                        to={item.action_url}
-                        className="text-xs text-gold-300 hover:underline"
-                      >
-                        Open
-                      </Link>
-                    )}
-                    {!item.is_read && (
-                      <button
-                        type="button"
-                        onClick={() => markRead(item.id)}
-                        className="text-xs text-white/50 hover:text-white"
-                      >
-                        Mark read
-                      </button>
-                    )}
-                  </div>
+            <li
+              key={item.id}
+              className={`flex items-start justify-between gap-6 py-6 ${item.is_read ? "" : "bg-gold-tint px-4 -mx-4 rounded-[10px]"}`}
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium">{item.title}</p>
+                  {!item.is_read && <span className="tag tag-gold">New</span>}
                 </div>
-              </Panel>
+                <p className="body mt-1 !text-[15px]">{item.body}</p>
+                <p className="cap mt-2">{formatRelative(item.created_at)}</p>
+              </div>
+
+              <div className="flex shrink-0 flex-col items-end">
+                {item.action_url && (
+                  <Link
+                    to={item.action_url}
+                    className="inline-flex h-11 items-center text-[15px] font-medium text-gold-ink underline-offset-4 hover:underline"
+                  >
+                    Open
+                  </Link>
+                )}
+                {!item.is_read && (
+                  <button
+                    type="button"
+                    onClick={() => markRead(item.id)}
+                    className="h-11 text-[15px] text-ink3 underline-offset-4 hover:text-ink hover:underline"
+                  >
+                    Mark read
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }

@@ -50,6 +50,14 @@ class LiveClassDetailView(generics.RetrieveUpdateDestroyAPIView):
             queryset = queryset.filter(course__instructor=self.request.user)
         return queryset
 
+    def perform_update(self, serializer):
+        # Moving a live class needs ownership of the destination course too.
+        if "course" in serializer.validated_data:
+            self.check_object_permissions(
+                self.request, serializer.validated_data["course"]
+            )
+        serializer.save()
+
 
 class CourseLiveClassListView(generics.ListAPIView):
     """GET /api/v1/live-classes/?course=<slug> -- student-facing list, no meeting link."""

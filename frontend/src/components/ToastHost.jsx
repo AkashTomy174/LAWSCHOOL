@@ -1,4 +1,5 @@
 import { useUI } from "../context/UIContext";
+import Icon from "./Icon";
 
 /**
  * Toast host.
@@ -13,10 +14,10 @@ export default function ToastHost() {
   if (!toasts.length) return null;
 
   const tones = {
-    info: "border-[var(--color-border-subtle)] text-parchment",
-    success: "border-emerald-500/40 text-emerald-100",
-    error: "border-red-500/40 text-red-100",
-    warning: "border-amber-500/40 text-amber-100",
+    info: "border-line-strong",
+    success: "border-ok",
+    error: "border-bad",
+    warning: "border-gold",
   };
 
   return (
@@ -26,7 +27,7 @@ export default function ToastHost() {
           key={toast.id}
           role={toast.tone === "error" ? "alert" : "status"}
           aria-live={toast.tone === "error" ? "assertive" : "polite"}
-          className={`pointer-events-auto panel w-full max-w-md px-4 py-3 text-sm shadow-lg ${
+          className={`pointer-events-auto card lift w-full max-w-md px-4 py-3 text-sm text-ink ${
             tones[toast.tone] || tones.info
           }`}
         >
@@ -35,10 +36,10 @@ export default function ToastHost() {
             <button
               type="button"
               onClick={() => dismissToast(toast.id)}
-              className="text-white/50 hover:text-white"
+              className="-m-2 flex h-11 w-11 flex-none items-center justify-center rounded-lg text-ink3 hover:bg-sunken hover:text-ink"
               aria-label="Dismiss notification"
             >
-              {"\u2715"}
+              <Icon name="x" className="i-sm" />
             </button>
           </div>
         </div>

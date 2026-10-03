@@ -16,7 +16,7 @@ from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnl
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import IsCourseOwnerOrAdmin, IsInstructorOrAdmin, is_admin
+from apps.core.permissions import IsAdminRole, IsCourseOwnerOrAdmin, is_admin
 from apps.courses import selectors
 from apps.courses.models import Course, Lesson, Section
 from apps.courses.serializers import (
@@ -103,7 +103,11 @@ def _course_detail_context(request, course) -> dict:
 # Courses
 # --------------------------------------------------------------------------- #
 class CourseListView(generics.ListCreateAPIView):
-    """GET /api/v1/courses/ (public catalogue) · POST (instructors/admins)."""
+    """GET /api/v1/courses/ (public catalogue) · POST (admins only).
+
+    Course ownership is an admin decision: instructors can view courses but never
+    create them or assign themselves as instructor of record.
+    """
 
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -121,7 +125,7 @@ class CourseListView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsInstructorOrAdmin()]
+            return [IsAdminRole()]
         return super().get_permissions()
 
     def get_queryset(self):
@@ -151,7 +155,7 @@ class CourseListView(generics.ListCreateAPIView):
 
 
 class CourseDetailView(generics.RetrieveUpdateAPIView):
-    """GET /api/v1/courses/<slug>/ -- public metadata; writes are instructor/admin."""
+    """GET /api/v1/courses/<slug>/ -- public metadata; writes are admin-only."""
 
     lookup_field = "slug"
     permission_classes = [IsAuthenticatedOrReadOnly]
@@ -163,7 +167,7 @@ class CourseDetailView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         if self.request.method in {"PATCH", "PUT"}:
-            return [IsInstructorOrAdmin()]
+            return [IsAdminRole()]
         return super().get_permissions()
 
     def get_queryset(self):
@@ -309,6 +313,14 @@ class SectionDetailView(generics.RetrieveUpdateDestroyAPIView):
             queryset = queryset.filter(course__instructor=self.request.user)
         return queryset
 
+    def perform_update(self, serializer):
+        # Moving a section needs ownership of the destination course too.
+        if "course" in serializer.validated_data:
+            self.check_object_permissions(
+                self.request, serializer.validated_data["course"]
+            )
+        serializer.save()
+
 
 class LessonListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/v1/lessons/?section=<uuid>."""
@@ -347,6 +359,14 @@ class LessonDetailView(generics.RetrieveUpdateDestroyAPIView):
         if not is_admin(self.request):
             queryset = queryset.filter(section__course__instructor=self.request.user)
         return queryset
+
+    def perform_update(self, serializer):
+        # Moving a lesson needs ownership of the destination section's course too.
+        if "section" in serializer.validated_data:
+            self.check_object_permissions(
+                self.request, serializer.validated_data["section"].course
+            )
+        serializer.save()
 
 
 class LessonWatchView(APIView):

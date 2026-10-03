@@ -800,3 +800,78 @@ class TestPaymentHistoryEndpoints:
         response = jwt_client(admin_user).get("/api/v1/payments/all/")
         assert "provider_payload" not in json.dumps(response.data)
         assert "provider_signature" not in json.dumps(response.data)
+
+
+class TestWebhookEventIntegrity:
+    def test_unsigned_webhook_records_nothing(self, api_client, student, plan):
+        """Regression: unsigned requests were stored, letting anyone pre-claim a
+        real event id so the genuine delivery was dropped as a duplicate."""
+        make_payment(student, plan, order_id="order_preclaim")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_preclaim",
+                payment_id="pay_preclaim",
+                amount_paise=plan.price_paise,
+            )
+        ).encode()
+
+        forged = api_client.post(
+            WEBHOOK_URL,
+            data=body,
+            content_type="application/json",
+            HTTP_X_RAZORPAY_SIGNATURE="forged",
+            HTTP_X_RAZORPAY_EVENT_ID="evt_preclaim",
+        )
+        assert forged.status_code == 400
+        assert not WebhookEvent.objects.filter(event_id="evt_preclaim").exists()
+
+        genuine = api_client.post(
+            WEBHOOK_URL,
+            data=body,
+            content_type="application/json",
+            HTTP_X_RAZORPAY_SIGNATURE=sign_webhook(body),
+            HTTP_X_RAZORPAY_EVENT_ID="evt_preclaim",
+        )
+        assert genuine.data["status"] == "processed"
+
+    def test_failed_event_is_reprocessed_on_retry(
+        self, api_client, student, plan, monkeypatch
+    ):
+        """Regression: a retry of a failed delivery was acknowledged as a
+        duplicate, so a charged customer never got their subscription."""
+        from apps.payments import services
+
+        make_payment(student, plan, order_id="order_retry")
+        body = json.dumps(
+            webhook_payload(
+                order_id="order_retry",
+                payment_id="pay_retry",
+                amount_paise=plan.price_paise,
+            )
+        ).encode()
+        headers = {
+            "HTTP_X_RAZORPAY_SIGNATURE": sign_webhook(body),
+            "HTTP_X_RAZORPAY_EVENT_ID": "evt_retry",
+        }
+
+        def boom(_payload):
+            raise RuntimeError("transient failure")
+
+        monkeypatch.setitem(services._WEBHOOK_HANDLERS, "payment.captured", boom)
+        first = api_client.post(
+            WEBHOOK_URL, data=body, content_type="application/json", **headers
+        )
+        assert first.status_code == 500
+
+        monkeypatch.setitem(
+            services._WEBHOOK_HANDLERS,
+            "payment.captured",
+            services.handle_payment_captured,
+        )
+        retry = api_client.post(
+            WEBHOOK_URL, data=body, content_type="application/json", **headers
+        )
+        assert retry.data["status"] == "processed"
+        assert Subscription.objects.filter(
+            user=student, status=SubscriptionStatus.ACTIVE
+        ).exists()

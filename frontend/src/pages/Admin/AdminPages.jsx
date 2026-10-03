@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { PageHeader } from "../../components/Layout";
+import { useAuth } from "../../context/AuthContext";
 import { Badge, ErrorState, Panel, Skeleton } from "../../components/ui";
 import useAsync from "../../hooks/useAsync";
 import courseService from "../../services/courseService";
@@ -77,7 +78,7 @@ export default function AdminDashboard() {
   ];
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Platform administration"
         description="System overview. Counts are read from the live database, not a cached summary table."
@@ -95,13 +96,13 @@ export default function AdminDashboard() {
                 to={card.to}
                 className="panel panel-interactive p-4"
               >
-                <p className="text-xs uppercase tracking-wider text-white/45">
+                <p className="small">
                   {card.label}
                 </p>
                 {card.value === undefined ? (
                   <Skeleton className="mt-2 h-8 w-16" />
                 ) : (
-                  <p className="mt-1 font-display text-2xl text-gold-300">
+                  <p className="mt-1 font-serif text-[32px] leading-none num">
                     {card.value}
                   </p>
                 )}
@@ -110,16 +111,16 @@ export default function AdminDashboard() {
           </div>
 
           <Panel className="mt-6 p-5">
-            <h2 className="font-display text-lg text-parchment">
+            <h2 className="h4">
               Operational notes
             </h2>
-            <div className="gold-rule my-4" />
-            <ul className="space-y-3 text-sm text-white/65">
+            <div className="rule my-4" />
+            <ul className="space-y-3 text-sm text-ink3">
               <li className="flex gap-3">
                 <Badge tone="gold">Django admin</Badge>
                 <span>
                   Full CRUD, filters and inlines live in{" "}
-                  <a href="/admin/" className="text-gold-300 underline">
+                  <a href="/admin/" className="text-gold-ink underline">
                     Django&apos;s admin
                   </a>
                   . This area is a read-friendly overview for day-to-day checks.
@@ -155,7 +156,7 @@ export function AdminUsers() {
   const users = useAsync(() => userService.list({ page_size: 50 }), []);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Users"
         description="Search the people directory. Role changes and deactivation are done in Django admin for auditability."
@@ -169,7 +170,7 @@ export function AdminUsers() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Name
@@ -185,11 +186,11 @@ export function AdminUsers() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(users.data?.results || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-parchment">{row.name}</td>
-                  <td className="px-4 py-3 text-white/65">{row.email}</td>
+                  <td className="px-4 py-3 text-ink">{row.name}</td>
+                  <td className="px-4 py-3 text-ink3">{row.email}</td>
                   <td className="px-4 py-3">
                     <Badge tone={row.role === "admin" ? "gold" : "muted"}>
                       {row.role_display}
@@ -214,21 +215,25 @@ export function AdminUsers() {
 /* Courses                                                                    */
 /* -------------------------------------------------------------------------- */
 export function AdminCourses() {
+  // Course creation and ownership are admin-only; instructors get a read-only view.
+  const { isAdmin } = useAuth();
   const courses = useAsync(
     () => courseService.list({ scope: "all", page_size: 50 }),
     [],
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Courses"
         description="All courses including drafts. Create and edit through Django admin so validation and audit trails stay server-side."
         breadcrumbs={[{ label: "Admin", to: "/admin" }, { label: "Courses" }]}
         actions={
-          <a href="/admin/courses/course/add/" className="btn btn-primary">
-            New course
-          </a>
+          isAdmin ? (
+            <a href="/admin/courses/course/add/" className="btn btn-primary">
+              New course
+            </a>
+          ) : null
         }
       />
 
@@ -239,7 +244,7 @@ export function AdminCourses() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Title
@@ -258,18 +263,18 @@ export function AdminCourses() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(courses.data?.results || []).map((row) => (
                 <tr key={row.id}>
                   <td className="px-4 py-3">
                     <Link
                       to={`/courses/${row.slug}`}
-                      className="text-parchment hover:text-gold-300"
+                      className="text-ink hover:text-gold-ink"
                     >
                       {row.title}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink3">
                     {row.instructor?.name || "—"}
                   </td>
                   <td className="px-4 py-3">
@@ -279,10 +284,10 @@ export function AdminCourses() {
                       {row.status}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink3">
                     {row.lesson_count}
                   </td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink3">
                     {formatMoney(row.price)}
                   </td>
                 </tr>
@@ -305,7 +310,7 @@ export function AdminSubscriptions() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Subscriptions"
         description="Every subscription record with its validity window. Status corrections happen in Django admin."
@@ -325,7 +330,7 @@ export function AdminSubscriptions() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   User
@@ -344,22 +349,22 @@ export function AdminSubscriptions() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(subscriptions.data?.results || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-parchment">{row.user_email}</td>
-                  <td className="px-4 py-3 text-white/65">{row.plan?.name}</td>
+                  <td className="px-4 py-3 text-ink">{row.user_email}</td>
+                  <td className="px-4 py-3 text-ink3">{row.plan?.name}</td>
                   <td className="px-4 py-3">
                     <Badge tone={row.is_currently_active ? "success" : "muted"}>
                       {row.status}
                     </Badge>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-white/65">
+                  <td className="whitespace-nowrap px-4 py-3 text-ink3">
                     {row.end_date
                       ? new Date(row.end_date).toLocaleDateString("en-IN")
                       : "—"}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-white/50">
+                  <td className="px-4 py-3 font-mono text-xs text-ink3">
                     {row.payment_reference || "—"}
                   </td>
                 </tr>
@@ -383,7 +388,7 @@ export function AdminPayments() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Payments"
         description="Read-only ledger. Status changes come exclusively from verified Razorpay events."
@@ -397,7 +402,7 @@ export function AdminPayments() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Order
@@ -416,14 +421,14 @@ export function AdminPayments() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(payments.data?.results || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 font-mono text-xs text-white/60">
+                  <td className="px-4 py-3 font-mono text-xs text-ink3">
                     {row.provider_order_id}
                   </td>
-                  <td className="px-4 py-3 text-parchment">{row.user_email}</td>
-                  <td className="px-4 py-3 text-white/80">
+                  <td className="px-4 py-3 text-ink">{row.user_email}</td>
+                  <td className="px-4 py-3 text-ink2">
                     {formatMoney(row.amount, row.currency)}
                   </td>
                   <td className="px-4 py-3">
@@ -439,7 +444,7 @@ export function AdminPayments() {
                       {row.status}
                     </Badge>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-white/60">
+                  <td className="whitespace-nowrap px-4 py-3 text-ink3">
                     {new Date(row.created_at).toLocaleString("en-IN")}
                   </td>
                 </tr>
@@ -449,17 +454,17 @@ export function AdminPayments() {
         </Panel>
       )}
 
-      <h2 className="mt-8 font-display text-lg text-parchment">
+      <h2 className="h4 mt-10">
         Webhook events
       </h2>
-      <div className="gold-rule my-4" />
+      <div className="rule my-4" />
 
       {webhooks.loading ? (
         <Skeleton className="h-40 w-full" />
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Event
@@ -475,11 +480,11 @@ export function AdminPayments() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(webhooks.data?.results || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-white/80">{row.event_type}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-white/50">
+                  <td className="px-4 py-3 text-ink2">{row.event_type}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink3">
                     {row.event_id}
                   </td>
                   <td className="px-4 py-3">
@@ -492,7 +497,7 @@ export function AdminPayments() {
                       {row.processed ? "Yes" : "No"}
                     </Badge>
                     {row.processing_error && (
-                      <span className="mt-1 block text-xs text-red-300/80">
+                      <span className="mt-1 block text-xs text-bad/80">
                         {row.processing_error}
                       </span>
                     )}
@@ -503,7 +508,7 @@ export function AdminPayments() {
                 <tr>
                   <td
                     colSpan={4}
-                    className="px-4 py-6 text-center text-white/45"
+                    className="px-4 py-6 text-center text-ink3"
                   >
                     No webhook events received yet.
                   </td>
@@ -521,6 +526,8 @@ export function AdminPayments() {
 /* Videos                                                                     */
 /* -------------------------------------------------------------------------- */
 export function AdminVideos() {
+  // Video editing is admin-only; instructors get a read-only view.
+  const { isAdmin } = useAuth();
   const videos = useAsync(() => videoService.list(), []);
 
   async function sync(uid) {
@@ -529,7 +536,7 @@ export function AdminVideos() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Videos"
         description="Cloudflare Stream assets. Files are never stored on the application server — only metadata lives in the database."
@@ -543,7 +550,7 @@ export function AdminVideos() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Title
@@ -562,11 +569,11 @@ export function AdminVideos() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(videos.data || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-parchment">{row.title}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-white/50">
+                  <td className="px-4 py-3 text-ink">{row.title}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-ink3">
                     {row.cloudflare_video_id}
                   </td>
                   <td className="px-4 py-3">
@@ -582,17 +589,21 @@ export function AdminVideos() {
                       {row.status}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink3">
                     {Math.floor((row.duration_seconds || 0) / 60)}m
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => sync(row.playback_uid)}
-                      className="text-xs text-gold-300 hover:underline"
-                    >
-                      Re-sync
-                    </button>
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() => sync(row.playback_uid)}
+                        className="text-xs text-gold-ink hover:underline"
+                      >
+                        Re-sync
+                      </button>
+                    ) : (
+                      <span className="text-xs text-ink3">View only</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -615,7 +626,7 @@ export function AdminQuizzes() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Quizzes"
         description="Quiz inventory and the latest graded attempts. Scoring is always computed server-side."
@@ -629,7 +640,7 @@ export function AdminQuizzes() {
       ) : (
         <Panel className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Title
@@ -645,14 +656,14 @@ export function AdminQuizzes() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(quizzes.data || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-parchment">{row.title}</td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink">{row.title}</td>
+                  <td className="px-4 py-3 text-ink3">
                     {row.question_count}
                   </td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink3">
                     {row.pass_percentage}%
                   </td>
                   <td className="px-4 py-3">
@@ -667,14 +678,14 @@ export function AdminQuizzes() {
         </Panel>
       )}
 
-      <h2 className="mt-8 font-display text-lg text-parchment">
+      <h2 className="h4 mt-10">
         Recent attempts
       </h2>
-      <div className="gold-rule my-4" />
+      <div className="rule my-4" />
 
       <Panel className="overflow-x-auto">
         <table className="w-full text-left text-sm">
-          <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+          <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
             <tr>
               <th scope="col" className="px-4 py-3">
                 Quiz
@@ -687,11 +698,11 @@ export function AdminQuizzes() {
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody className="divide-y divide-line">
             {(attempts.data?.results || []).map((row) => (
               <tr key={row.id}>
-                <td className="px-4 py-3 text-white/80">{row.quiz_title}</td>
-                <td className="px-4 py-3 text-white/65">
+                <td className="px-4 py-3 text-ink2">{row.quiz_title}</td>
+                <td className="px-4 py-3 text-ink3">
                   {row.score}/{row.max_score} (
                   {Math.round(Number(row.percentage))}%)
                 </td>
@@ -704,7 +715,7 @@ export function AdminQuizzes() {
             ))}
             {(attempts.data?.results || []).length === 0 && (
               <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-white/45">
+                <td colSpan={3} className="px-4 py-6 text-center text-ink3">
                   No attempts recorded yet.
                 </td>
               </tr>
@@ -728,7 +739,7 @@ export function AdminLeaderboard() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-10">
+    <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
         title="Leaderboard"
         description="Rankings are denormalised for performance and rebuilt by a nightly job."
@@ -750,7 +761,7 @@ export function AdminLeaderboard() {
       ) : (
         <Panel className="overflow-hidden">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-white/50">
+            <thead className="bg-sunken text-[13px] text-ink3 [&_th]:font-medium">
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Rank
@@ -769,16 +780,16 @@ export function AdminLeaderboard() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-line">
               {(board.data?.results || []).map((row) => (
                 <tr key={row.user_id}>
-                  <td className="px-4 py-3 text-white/70">{row.rank}</td>
-                  <td className="px-4 py-3 text-parchment">{row.name}</td>
-                  <td className="px-4 py-3 text-white/65">{row.quiz_score}</td>
-                  <td className="px-4 py-3 text-white/65">
+                  <td className="px-4 py-3 text-ink2">{row.rank}</td>
+                  <td className="px-4 py-3 text-ink">{row.name}</td>
+                  <td className="px-4 py-3 text-ink3">{row.quiz_score}</td>
+                  <td className="px-4 py-3 text-ink3">
                     {row.lessons_completed}
                   </td>
-                  <td className="px-4 py-3 text-right font-semibold text-gold-300">
+                  <td className="px-4 py-3 mono text-right font-medium">
                     {row.total_score}
                   </td>
                 </tr>

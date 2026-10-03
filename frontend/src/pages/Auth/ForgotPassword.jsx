@@ -100,8 +100,7 @@ export default function ForgotPassword() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-md px-4 py-12">
-      <Panel className="p-6 sm:p-8">
+    <AuthLayout>
         {done ? (
           <EmptyState
             title={isConfirmStep ? "Password updated" : "Check your inbox"}
@@ -118,16 +117,16 @@ export default function ForgotPassword() {
           />
         ) : (
           <>
-            <h1 className="font-display text-2xl text-parchment">
+            <h1 className="h2 !text-[38px]">
               {isConfirmStep ? "Choose a new password" : "Reset your password"}
             </h1>
-            <p className="mt-2 text-sm text-white/55">
+            <p className="body mt-3">
               {isConfirmStep
                 ? "Pick a strong password you have not used before."
                 : "Enter your account email and we will send you a reset link."}
             </p>
 
-            <div className="gold-rule my-6" />
+            <div className="h-7" />
 
             {error && (
               <div className="mb-5">
@@ -166,7 +165,7 @@ export default function ForgotPassword() {
                   }
                   error={fieldErrors.newPasswordConfirm}
                 />
-                <Button type="submit" loading={submitting} className="w-full">
+                <Button type="submit" loading={submitting} className="btn-lg btn-block">
                   Set new password
                 </Button>
               </form>
@@ -185,22 +184,21 @@ export default function ForgotPassword() {
                   error={fieldErrors.email}
                   placeholder="you@example.com"
                 />
-                <Button type="submit" loading={submitting} className="w-full">
+                <Button type="submit" loading={submitting} className="btn-lg btn-block">
                   Send reset link
                 </Button>
               </form>
             )}
 
-            <p className="mt-6 text-center text-sm text-white/55">
+            <p className="mt-6 text-center text-sm text-ink3">
               Remembered it?{" "}
-              <Link to="/login" className="text-gold-300 hover:underline">
+              <Link to="/login" className="text-gold-ink hover:underline">
                 Sign in
               </Link>
             </p>
           </>
         )}
-      </Panel>
-    </div>
+    </AuthLayout>
   );
 }
 
@@ -233,8 +231,7 @@ export function VerifyEmail() {
   });
 
   return (
-    <div className="mx-auto w-full max-w-md px-4 py-12">
-      <Panel className="p-6 sm:p-8">
+    <AuthLayout>
         {state === "done" ? (
           <EmptyState
             title="Email verified"
@@ -258,42 +255,32 @@ export function VerifyEmail() {
           />
         ) : (
           <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <p className="text-sm text-white/65">
+            <p className="text-sm text-ink3">
               Verifying your email address…
             </p>
           </div>
         )}
-      </Panel>
-    </div>
+    </AuthLayout>
   );
 }
 
 /** 404 page. */
 export function NotFound() {
   return (
-    <div className="mx-auto w-full max-w-lg px-4 py-20">
-      <Panel className="p-8 text-center">
-        <p
-          className="font-display text-5xl text-gold-500/50"
-          aria-hidden="true"
-        >
-          404
-        </p>
-        <h1 className="mt-4 font-display text-2xl text-parchment">
-          Page not found
-        </h1>
-        <p className="mt-3 text-sm text-white/60">
-          The page you were looking for does not exist or has moved.
-        </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-3">
-          <Link to="/" className="btn btn-primary">
-            Back to home
-          </Link>
-          <Link to="/courses" className="btn btn-ghost">
-            Browse courses
-          </Link>
-        </div>
-      </Panel>
+    <div className="wrap flex flex-col items-start gap-6 py-24 lg:py-32">
+      <span className="mono cap">Error 404</span>
+      <h1 className="d2">Page not found</h1>
+      <p className="lead">
+        The page you were looking for does not exist or has moved.
+      </p>
+      <div className="flex flex-wrap gap-3 pt-2">
+        <Link to="/" className="btn btn-gold btn-lg">
+          Back to home
+        </Link>
+        <Link to="/courses" className="btn btn-line btn-lg">
+          Browse courses
+        </Link>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
+import AuthLayout from "../../components/AuthLayout";
 import { Button, Callout, Panel, TextField } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
 import { fieldErrorsFrom, validateLogin } from "../../utils/validation";
@@ -62,14 +63,13 @@ export default function Login() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-md px-4 py-12">
-      <Panel className="p-6 sm:p-8">
-        <h1 className="font-display text-2xl text-parchment">Welcome back</h1>
-        <p className="mt-2 text-sm text-white/55">
+    <AuthLayout>
+        <h1 className="h2 !text-[38px]">Welcome back</h1>
+        <p className="body mt-3">
           Sign in to continue your coursework.
         </p>
 
-        <div className="gold-rule my-6" />
+        <div className="h-7" />
 
         {generalError && (
           <div className="mb-5">
@@ -106,24 +106,23 @@ export default function Login() {
           <div className="flex items-center justify-between text-sm">
             <Link
               to="/forgot-password"
-              className="text-gold-300 hover:underline"
+              className="text-gold-ink hover:underline"
             >
               Forgot password?
             </Link>
           </div>
 
-          <Button type="submit" loading={submitting} className="w-full">
+          <Button type="submit" loading={submitting} className="btn-lg btn-block">
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-white/55">
+        <p className="mt-6 text-center text-sm text-ink3">
           New to LawSchool?{" "}
-          <Link to="/register" className="text-gold-300 hover:underline">
+          <Link to="/register" className="text-gold-ink hover:underline">
             Create an account
           </Link>
         </p>
-      </Panel>
-    </div>
+    </AuthLayout>
   );
 }

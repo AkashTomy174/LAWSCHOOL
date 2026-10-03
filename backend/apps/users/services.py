@@ -7,7 +7,10 @@ the result to a response.
 from __future__ import annotations
 
 from django.conf import settings
-from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.tokens import (
+    PasswordResetTokenGenerator,
+    default_token_generator,
+)
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -16,6 +19,23 @@ from apps.core.logging import get_logger
 from apps.users.models import User
 
 logger = get_logger(__name__)
+
+
+class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
+    """Verification tokens that are useless as password-reset tokens.
+
+    Sharing ``default_token_generator`` meant a leaked verification link was
+    also a working password-reset link.  A distinct salt separates the two, and
+    hashing ``is_email_verified`` makes each link single-use.
+    """
+
+    key_salt = "apps.users.services.EmailVerificationTokenGenerator"
+
+    def _make_hash_value(self, user, timestamp) -> str:
+        return f"{user.pk}{user.is_email_verified}{timestamp}"
+
+
+email_verification_token = EmailVerificationTokenGenerator()
 
 
 def create_student(*, email: str, name: str, password: str, phone: str = "") -> User:
@@ -47,7 +67,7 @@ def create_student(*, email: str, name: str, password: str, phone: str = "") -> 
 
 def build_email_verification_url(user: User) -> str:
     uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = default_token_generator.make_token(user)
+    token = email_verification_token.make_token(user)
     return f"{settings.FRONTEND_URL}/verify-email?uid={uid}&token={token}"
 
 
@@ -56,7 +76,7 @@ def verify_email_token(*, uid: str, token: str) -> User:
     from apps.core.exceptions import DomainError
 
     user = _user_from_uid(uid)
-    if user is None or not default_token_generator.check_token(user, token):
+    if user is None or not email_verification_token.check_token(user, token):
         raise DomainError(
             {"detail": "This verification link is invalid or has expired."},
             code="invalid_token",

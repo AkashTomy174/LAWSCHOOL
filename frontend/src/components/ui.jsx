@@ -61,17 +61,13 @@ export function Panel({ children, className = "", interactive = false }) {
 
 export function Badge({ children, tone = "gold", className = "" }) {
   const tones = {
-    gold: "bg-[rgba(212,175,55,0.15)] text-gold-300 border border-[var(--color-border-subtle)]",
-    success: "bg-[rgba(52,211,153,0.15)] text-emerald-300",
-    danger: "bg-[rgba(248,113,113,0.15)] text-red-300",
-    warning: "bg-[rgba(251,191,36,0.15)] text-amber-300",
-    muted: "bg-white/5 text-white/60",
+    gold: "tag-gold",
+    success: "tag-ok",
+    danger: "tag-bad",
+    warning: "tag-gold",
+    muted: "",
   };
-  return (
-    <span className={`badge ${tones[tone] || tones.gold} ${className}`}>
-      {children}
-    </span>
-  );
+  return <span className={`tag ${tones[tone] ?? ""} ${className}`}>{children}</span>;
 }
 
 /** Progress bar with ARIA values so screen readers announce the number. */
@@ -80,23 +76,20 @@ export function ProgressBar({ value = 0, label, className = "" }) {
   return (
     <div className={className}>
       {label && (
-        <div className="mb-1.5 flex items-center justify-between text-xs text-white/60">
+        <div className="mb-1.5 flex items-center justify-between text-xs text-ink3">
           <span>{label}</span>
-          <span>{Math.round(percent)}%</span>
+          <span className="mono">{Math.round(percent)}%</span>
         </div>
       )}
       <div
-        className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
+        className="bar"
         role="progressbar"
         aria-valuenow={Math.round(percent)}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={label || "Progress"}
       >
-        <div
-          className="h-full rounded-full bg-gold-500 transition-[width] duration-500"
-          style={{ width: `${percent}%` }}
-        />
+        <i style={{ width: `${percent}%` }} />
       </div>
     </div>
   );
@@ -114,7 +107,7 @@ export function Skeleton({ className = "", count = 1 }) {
       {Array.from({ length: count }).map((_, index) => (
         <div
           key={index}
-          className={`animate-pulse rounded-lg bg-white/5 ${className}`}
+          className={`animate-pulse rounded-lg bg-sunken ${className}`}
           aria-hidden="true"
         />
       ))}
@@ -122,22 +115,11 @@ export function Skeleton({ className = "", count = 1 }) {
   );
 }
 
-export function EmptyState({ title, description, action, icon = "law" }) {
-  const icons = {
-    law: "\u2696\uFE0F",
-    search: "\u{1F50D}",
-    lock: "\u{1F512}",
-    chart: "\u{1F4CA}",
-  };
+export function EmptyState({ title, description, action }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-      <div className="text-4xl" aria-hidden="true">
-        {icons[icon] || icons.law}
-      </div>
-      <h3 className="font-display text-lg text-parchment">{title}</h3>
-      {description && (
-        <p className="max-w-md text-sm text-white/60">{description}</p>
-      )}
+      <h3 className="h4">{title}</h3>
+      {description && <p className="body max-w-md">{description}</p>}
       {action}
     </div>
   );
@@ -155,9 +137,9 @@ export function ErrorState({ error, onRetry, className = "" }) {
   return (
     <div
       role="alert"
-      className={`panel border-red-500/30 px-4 py-3 text-sm text-red-200 ${className}`}
+      className={`flex rounded-[10px] border border-bad bg-bad-bg px-4 py-3 text-sm text-ink ${className}`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex w-full flex-wrap items-center justify-between gap-3">
         <span>{message}</span>
         {onRetry && (
           <Button
@@ -177,7 +159,7 @@ export function ErrorState({ error, onRetry, className = "" }) {
 export function FieldError({ id, children }) {
   if (!children) return null;
   return (
-    <p id={id} role="alert" className="mt-1 text-xs text-red-300">
+    <p id={id} role="alert" className="mt-1 text-[13px] text-bad">
       {children}
     </p>
   );
@@ -212,7 +194,7 @@ export function TextField({
         {...rest}
       />
       {hint && (
-        <p id={`${id}-hint`} className="mt-1 text-xs text-white/45">
+        <p id={`${id}-hint`} className="cap mt-1">
           {hint}
         </p>
       )}
@@ -240,8 +222,8 @@ export function Avatar({ user, size = 36, className = "" }) {
 
   return (
     <span
-      className={`flex items-center justify-center rounded-full bg-gold-500/20 font-display text-gold-300 ${className}`}
-      style={{ width: size, height: size, fontSize: size * 0.42 }}
+      className={`avatar ${className}`}
+      style={{ width: size, height: size, fontSize: size * 0.38 }}
       aria-hidden="true"
     >
       {initial}
@@ -251,15 +233,15 @@ export function Avatar({ user, size = 36, className = "" }) {
 
 export function Callout({ tone = "info", title, children }) {
   const tones = {
-    info: "border-[var(--color-border-subtle)] text-parchment",
-    warning: "border-amber-500/30 text-amber-100",
-    danger: "border-red-500/30 text-red-100",
-    success: "border-emerald-500/30 text-emerald-100",
+    info: "border-line bg-card",
+    warning: "border-gold bg-gold-tint",
+    danger: "border-bad bg-bad-bg",
+    success: "border-ok bg-ok-bg",
   };
   return (
-    <div className={`panel px-4 py-3 ${tones[tone] || tones.info}`}>
-      {title && <p className="mb-1 font-semibold">{title}</p>}
-      <div className="text-sm opacity-90">{children}</div>
+    <div className={`rounded-[10px] border px-4 py-3 ${tones[tone] || tones.info}`}>
+      {title && <p className="mb-1 font-medium text-ink">{title}</p>}
+      <div className="text-sm text-ink2">{children}</div>
     </div>
   );
 }

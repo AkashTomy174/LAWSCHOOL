@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { videoService } from "../services/videoService";
 import { useVideoProgress } from "../hooks/useVideoProgress";
 import { formatDuration } from "../utils/format";
+import Icon from "./Icon";
 import { Badge, Button, Spinner } from "./ui";
 
 /**
@@ -120,8 +121,8 @@ export default function VideoPlayer({
   /* ------------------------------- states ------------------------------- */
   if (status === "loading") {
     return (
-      <div className="flex aspect-video w-full items-center justify-center rounded-xl border border-[var(--color-border-subtle)] bg-black">
-        <div className="flex flex-col items-center gap-3 text-white/60">
+      <div className="flex aspect-video w-full items-center justify-center rounded-[14px] border border-line bg-black">
+        <div className="flex flex-col items-center gap-3 text-[#B4BED6]">
           <Spinner size={28} />
           <span className="text-sm">Preparing secure playback…</span>
         </div>
@@ -131,9 +132,9 @@ export default function VideoPlayer({
 
   if (status === "processing") {
     return (
-      <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-black px-6 text-center">
+      <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-[14px] border border-line bg-black px-6 text-center">
         <Badge tone="warning">Encoding</Badge>
-        <p className="text-sm text-white/70">
+        <p className="text-sm text-[#EEF1F8]">
           This video is still being processed. It will become available
           automatically.
         </p>
@@ -159,12 +160,10 @@ export default function VideoPlayer({
     return (
       <div
         role="alert"
-        className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-red-500/30 bg-black px-6 text-center"
+        className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-[14px] border border-bad bg-black px-6 text-center"
       >
-        <span className="text-3xl" aria-hidden="true">
-          {"\u{1F512}"}
-        </span>
-        <p className="text-sm text-white/80">{message}</p>
+        <Icon name="lock" className="i-lg text-ink3" />
+        <p className="text-sm text-[#EEF1F8]">{message}</p>
         {[
           "subscription_expired",
           "subscription_required",
@@ -184,7 +183,7 @@ export default function VideoPlayer({
 
   /* ------------------------------- player ------------------------------- */
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--color-border-subtle)] bg-black">
+    <div className="overflow-hidden rounded-[14px] border border-line bg-black">
       <video
         ref={videoRef}
         className="aspect-video w-full bg-black"
@@ -218,7 +217,7 @@ export default function VideoPlayer({
         different device.
       </video>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] px-3 py-2 text-xs text-white/55">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2 text-xs text-ink3">
         <span>
           {progress.completed ? (
             <Badge tone="success">Completed</Badge>

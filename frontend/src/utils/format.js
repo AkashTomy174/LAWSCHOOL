@@ -43,6 +43,19 @@ export function formatMoney(amount, currency = "INR") {
   })}`;
 }
 
+/**
+ * Price for catalogue display: `₹1,999` (whole rupees drop the decimals).
+ * Billing and receipts keep the explicit `formatMoney` form.
+ */
+export function formatPrice(amount, currency = "INR") {
+  const value = Number(amount) || 0;
+  const symbol = currency === "INR" ? "₹" : `${currency} `;
+  return `${symbol}${value.toLocaleString("en-IN", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 /** Format paise (integer) the same way, for Razorpay payloads. */
 export function formatPaise(paise, currency = "INR") {
   return formatMoney(Number(paise) / 100, currency);

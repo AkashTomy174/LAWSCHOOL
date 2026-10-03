@@ -1,25 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { PageHeader } from "../../components/Layout";
+import Icon from "../../components/Icon";
 import VideoPlayer from "../../components/VideoPlayer";
-import {
-  Badge,
-  Button,
-  Callout,
-  ErrorState,
-  Panel,
-  Skeleton,
-} from "../../components/ui";
+import { Skeleton } from "../../components/ui";
 import useAsync from "../../hooks/useAsync";
 import courseService from "../../services/courseService";
 import videoService from "../../services/videoService";
 
 /**
- * Watch page: player on the left, lesson navigation on the right.
+ * Watch page (focus mode): player and lesson on the left, curriculum on the right.
  *
  * The page fetches lesson metadata and the course's lesson list, but **not** the
- * playback token — `VideoPlayer` requests that itself so the token is minted as
+ * playback token: `VideoPlayer` requests that itself so the token is minted as
  * late as possible and lives only in the player's memory.
  */
 export default function VideoPlayerPage() {
@@ -54,9 +47,9 @@ export default function VideoPlayerPage() {
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="mt-4 aspect-video w-full" />
+      <div className="px-4 py-8 sm:px-8">
+        <Skeleton className="h-11 w-48" />
+        <Skeleton className="mt-6 aspect-video w-full max-w-5xl" />
       </div>
     );
   }
@@ -68,37 +61,38 @@ export default function VideoPlayerPage() {
       "not_in_plan",
     ].includes(error.code);
     return (
-      <div className="mx-auto w-full max-w-3xl px-4 py-16">
-        <Panel className="p-8 text-center">
-          <h1 className="font-display text-2xl text-gold-300">
+      <div className="wrap max-w-3xl py-16">
+        <div className="card flex flex-col items-center gap-4 p-8 text-center sm:p-10">
+          <Icon name="lock" className="i-lg text-ink3" />
+          <h1 className="h3">
             {locked ? "This lesson is locked" : "Lesson unavailable"}
           </h1>
-          <p className="mt-3 text-sm text-white/70">
+          <p className="body">
             {error.message ||
               "This lesson could not be loaded. It may have been unpublished."}
           </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
             {locked ? (
-              <Link to="/subscription" className="btn btn-primary">
+              <Link to="/subscription" className="btn btn-gold">
                 View subscription plans
               </Link>
             ) : (
-              <Button variant="ghost" onClick={refetch}>
+              <button type="button" className="btn btn-line" onClick={refetch}>
                 Try again
-              </Button>
+              </button>
             )}
-            <Link to="/courses" className="btn btn-ghost">
+            <Link to="/courses" className="btn btn-line">
               Back to courses
             </Link>
           </div>
-        </Panel>
+        </div>
       </div>
     );
   }
 
   if (!watch) return null;
 
-  const { lesson, course, access, playback } = watch;
+  const { lesson, course, playback } = watch;
   const lessons = lessonList?.lessons || [];
   const currentIndex = lessons.findIndex((row) => row.id === lesson.id);
   const previous = currentIndex > 0 ? lessons[currentIndex - 1] : null;
@@ -106,27 +100,47 @@ export default function VideoPlayerPage() {
     currentIndex >= 0 && currentIndex < lessons.length - 1
       ? lessons[currentIndex + 1]
       : null;
+  const completed = lessons.filter((row) => row.is_completed).length;
+  const percent = lessons.length
+    ? Math.round((completed / lessons.length) * 100)
+    : 0;
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:py-8">
-      <PageHeader
-        title={lesson.title}
-        breadcrumbs={[
-          { label: "Courses", to: "/courses" },
-          { label: course.title, to: `/courses/${course.slug}` },
-          { label: lesson.title },
-        ]}
-        actions={
-          lesson.is_preview ? (
-            <Badge tone="success">Free preview</Badge>
-          ) : (
-            <Badge tone="gold">Enrolled</Badge>
-          )
-        }
-      />
+    <div>
+      <header className="flex min-h-[68px] flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-8">
+        <div className="flex min-w-0 items-center gap-4">
+          <Link to={`/courses/${course.slug}`} className="btn btn-line">
+            <Icon name="caretLeft" />
+            Course
+          </Link>
+          <nav
+            aria-label="Breadcrumb"
+            className="small hidden min-w-0 items-center gap-2 md:flex"
+          >
+            <span className="truncate">{course.title}</span>
+            <Icon name="caretRight" className="i-sm" />
+            <span className="truncate text-ink" aria-current="page">
+              {lesson.title}
+            </span>
+          </nav>
+        </div>
+        <div className="flex items-center gap-4">
+          {lessons.length > 0 && (
+            <span className="small num hidden sm:inline">
+              {percent}% of the course complete
+            </span>
+          )}
+          {next && !next.is_locked && (
+            <Link to={`/watch/${next.id}`} className="btn btn-gold">
+              Next lesson
+              <Icon name="caretRight" />
+            </Link>
+          )}
+        </div>
+      </header>
 
-      <div className="grid gap-6 lg:grid-cols-[1.7fr_1fr] lg:items-start">
-        <div className="space-y-5">
+      <div className="grid gap-10 px-4 pb-16 pt-7 sm:px-8 lg:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="flex min-w-0 flex-col gap-8">
           {playback?.video_uid ? (
             <VideoPlayer
               videoUid={playback.video_uid}
@@ -135,113 +149,135 @@ export default function VideoPlayerPage() {
               onCompleted={() => refetch({ silent: true })}
             />
           ) : (
-            <Callout tone="info">
-              This lesson does not have a video attached yet. Check back soon.
-            </Callout>
+            <div className="card flex aspect-video items-center justify-center p-8 text-center">
+              <p className="body">
+                This lesson does not have a video attached yet. Check back soon.
+              </p>
+            </div>
           )}
 
-          <Panel className="p-5">
-            <h2 className="font-display text-lg text-parchment">
+          <div className="flex flex-col gap-3">
+            <h1 className="d2 !text-[34px] sm:!text-[46px]">{lesson.title}</h1>
+            <p className="small flex flex-wrap items-center gap-2">
+              {currentIndex >= 0
+                ? `Lesson ${currentIndex + 1} of ${lessons.length}, `
+                : ""}
+              {course.title}
+              {lesson.is_preview && (
+                <span className="tag tag-gold">Free preview</span>
+              )}
+            </p>
+          </div>
+
+          <section aria-labelledby="about-lesson" className="flex flex-col gap-3">
+            <h2 id="about-lesson" className="h4 !text-[20px]">
               About this lesson
             </h2>
-            <div className="gold-rule my-3" />
-            <p className="whitespace-pre-line text-sm leading-relaxed text-white/70">
+            <p className="body max-w-[68ch] whitespace-pre-line !text-[17px]">
               {lesson.description ||
                 "No description has been added for this lesson."}
             </p>
-          </Panel>
+          </section>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Button
-              variant="ghost"
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6">
+            <button
+              type="button"
+              className="btn btn-line btn-lg"
               disabled={!previous || previous.is_locked}
               onClick={() => previous && navigate(`/watch/${previous.id}`)}
             >
-              ← Previous lesson
-            </Button>
-            <Link
-              to={`/courses/${course.slug}`}
-              className="text-sm text-gold-300 hover:underline"
-            >
-              Back to course
-            </Link>
-            <Button
-              variant="ghost"
+              <Icon name="caretLeft" />
+              Previous
+            </button>
+            <button
+              type="button"
+              className="btn btn-gold btn-lg"
               disabled={!next || next.is_locked}
               onClick={() => next && navigate(`/watch/${next.id}`)}
             >
-              Next lesson →
-            </Button>
+              Next lesson
+              <Icon name="caretRight" />
+            </button>
           </div>
         </div>
 
-        <aside aria-labelledby="lesson-list-heading">
-          <Panel className="overflow-hidden">
-            <div className="border-b border-[var(--color-border-subtle)] px-4 py-3">
-              <h2
-                id="lesson-list-heading"
-                className="font-display text-base text-parchment"
-              >
-                Course contents
-              </h2>
-              <p className="mt-0.5 text-xs text-white/45">
-                {lessons.filter((row) => row.is_completed).length} of{" "}
-                {lessons.length} completed
-              </p>
-            </div>
+        <aside
+          aria-labelledby="lesson-list-heading"
+          className="card self-start overflow-hidden lg:sticky lg:top-6"
+        >
+          <div className="flex flex-col gap-1 p-6 pb-5">
+            <h2 id="lesson-list-heading" className="h4">
+              Curriculum
+            </h2>
+            <span className="small num">
+              {completed} of {lessons.length} lessons complete
+            </span>
+          </div>
 
-            <ol className="max-h-[70vh] divide-y divide-white/5 overflow-y-auto">
-              {lessons.map((row, index) => {
-                const isCurrent = row.id === lesson.id;
-                return (
-                  <li key={row.id}>
-                    {row.is_locked ? (
-                      <div className="flex items-center gap-3 px-4 py-3 opacity-60">
-                        <span
-                          className="text-xs text-white/40"
-                          aria-hidden="true"
-                        >
-                          {"\u{1F512}"}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-sm">
-                          {row.title}
-                        </span>
-                        <Badge tone="muted">Locked</Badge>
-                      </div>
-                    ) : (
-                      <Link
-                        to={`/watch/${row.id}`}
-                        aria-current={isCurrent ? "page" : undefined}
-                        className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                          isCurrent ? "bg-gold-500/10" : "hover:bg-white/5"
-                        }`}
-                      >
-                        <span
-                          className={`text-xs ${row.is_completed ? "text-emerald-300" : "text-white/40"}`}
-                          aria-hidden="true"
-                        >
-                          {row.is_completed
-                            ? "\u2713"
-                            : String(index + 1).padStart(2, "0")}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm text-parchment">
-                            {row.title}
-                          </span>
-                          <span className="text-xs text-white/40">
-                            {row.duration_display}
-                          </span>
-                        </span>
-                        {row.quiz_id && <Badge tone="gold">Quiz</Badge>}
-                      </Link>
-                    )}
-                  </li>
-                );
-              })}
-            </ol>
-          </Panel>
+          <ol className="rows m-0 flex max-h-[70vh] list-none flex-col overflow-y-auto border-t border-line p-0">
+            {lessons.map((row) => (
+              <LessonItem
+                key={row.id}
+                row={row}
+                current={row.id === lesson.id}
+              />
+            ))}
+          </ol>
         </aside>
       </div>
     </div>
+  );
+}
+
+function StatusDot({ row, current }) {
+  if (row.is_locked) return <Icon name="lock" className="text-ink3" />;
+  if (row.is_completed)
+    return (
+      <span className="flex h-[22px] w-[22px] flex-none items-center justify-center rounded-full bg-ok text-[#07211A]">
+        <Icon name="check" className="i-sm" />
+      </span>
+    );
+  if (current)
+    return (
+      <span className="flex h-[22px] w-[22px] flex-none items-center justify-center rounded-full border-2 border-gold">
+        <i className="block h-2 w-2 rounded-full bg-gold" />
+      </span>
+    );
+  return (
+    <span className="h-[22px] w-[22px] flex-none rounded-full border-[1.5px] border-control" />
+  );
+}
+
+function LessonItem({ row, current }) {
+  const body = (
+    <>
+      <StatusDot row={row} current={current} />
+      <span
+        className={`min-w-0 flex-1 text-[15px] ${current ? "font-medium" : ""} ${row.is_locked ? "text-ink3" : ""}`}
+      >
+        {row.title}
+        {row.is_locked && <span className="sr-only"> (locked)</span>}
+      </span>
+      {row.quiz_id && <span className="tag">Quiz</span>}
+      <span className="mono cap">{row.duration_display}</span>
+    </>
+  );
+
+  const rowClass = `flex min-h-[52px] items-center gap-3 px-6 py-3.5 ${current ? "bg-gold-tint" : ""}`;
+
+  return (
+    <li>
+      {row.is_locked ? (
+        <div className={rowClass}>{body}</div>
+      ) : (
+        <Link
+          to={`/watch/${row.id}`}
+          aria-current={current ? "true" : undefined}
+          className={`${rowClass} transition-colors ${current ? "" : "hover:bg-sunken"}`}
+        >
+          {body}
+        </Link>
+      )}
+    </li>
   );
 }

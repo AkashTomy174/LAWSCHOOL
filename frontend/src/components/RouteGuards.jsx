@@ -49,16 +49,13 @@ export function RequireRole({ roles }) {
   }
   if (!roles.includes(user?.role)) {
     return (
-      <div className="mx-auto w-full max-w-2xl px-4 py-16">
-        <Panel className="p-8 text-center">
-          <h1 className="font-display text-2xl text-gold-300">
-            Not available for your account
-          </h1>
-          <p className="mt-3 text-sm text-white/70">
-            This area is restricted to {roles.join(" and ")} accounts. If you
-            believe you should have access, contact the platform administrator.
-          </p>
-        </Panel>
+      <div className="wrap flex flex-col items-start gap-5 py-24">
+        <span className="mono cap">Access restricted</span>
+        <h1 className="d2 !text-[44px]">Not available for your account</h1>
+        <p className="lead">
+          This area is restricted to {roles.join(" and ")} accounts. If you
+          believe you should have access, contact the platform administrator.
+        </p>
       </div>
     );
   }
