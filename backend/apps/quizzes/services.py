@@ -35,8 +35,8 @@ from apps.subscriptions.services import can_user_access_course
 
 logger = get_logger(__name__)
 
-# Network latency allowance on top of a quiz's time limit.
-_TIME_LIMIT_GRACE_SECONDS = 30
+# Slack for request latency / clock drift when enforcing a quiz's time limit.
+_TIME_GRACE = timedelta(seconds=30)
 
 
 def is_past_time_limit(attempt: QuizAttempt) -> bool:
@@ -44,10 +44,7 @@ def is_past_time_limit(attempt: QuizAttempt) -> bool:
     limit = attempt.quiz.time_limit_minutes
     if not limit:
         return False
-    deadline = attempt.started_at + timedelta(
-        minutes=limit, seconds=_TIME_LIMIT_GRACE_SECONDS
-    )
-    return timezone.now() > deadline
+    return timezone.now() - attempt.started_at > timedelta(minutes=limit) + _TIME_GRACE
 
 
 def _locked_course_message(course, decision) -> dict:

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from rest_framework.permissions import BasePermission
 
+from apps.core.network import client_ip
 from apps.core.permissions import (
     IsCourseOwnerOrAdmin,
     IsInstructorOrAdmin,
@@ -102,9 +103,6 @@ class QuizDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_serializer_class(self):
         if self.request.method in {"PATCH", "PUT"}:
             return QuizWriteSerializer
-        user = self.request.user
-        if is_admin(self.request) or getattr(user, "role", None) == "instructor":
-            return QuizDetailSerializer
         return QuizDetailSerializer
 
     def get_queryset(self):
@@ -370,7 +368,7 @@ class AttemptDetailView(APIView):
             pk=pk,
         )
         is_owner = attempt.user_id == request.user.pk
-        # Instructors only see attempts on quizzes in courses they own.
+        # Instructors may only see attempts on quizzes in courses they own.
         is_staff = is_admin(request) or (
             getattr(request.user, "role", None) == "instructor"
             and attempt.quiz.course.instructor_id == request.user.pk

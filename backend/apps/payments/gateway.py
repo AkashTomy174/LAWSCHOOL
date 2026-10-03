@@ -127,6 +127,18 @@ def fetch_payment(payment_id: str) -> dict:
         raise PaymentError({"detail": "Could not verify the payment with the gateway."})
 
 
+def fetch_order_payments(order_id: str) -> list[dict]:
+    """All payment attempts made against an order (reconciliation helper)."""
+    client = get_client()
+    try:
+        return client.order.payments(order_id).get("items", [])
+    except Exception:
+        logger.exception(
+            "Failed to fetch Razorpay order payments", extra={"order_id": order_id}
+        )
+        raise PaymentError({"detail": "Could not verify the order with the gateway."})
+
+
 def refund_payment(payment_id: str, amount_paise: int | None = None) -> dict:
     client = get_client()
     data = {"amount": amount_paise} if amount_paise else {}

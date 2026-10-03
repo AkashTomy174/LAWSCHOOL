@@ -473,9 +473,16 @@ class TestPermissionsByRole:
         assert response.status_code == 403
 
     def test_instructor_cannot_list_users(self, jwt_client, instructor):
-        """The directory exposes every email/phone; it is admin-only."""
         response = jwt_client(instructor).get("/api/v1/users/")
         assert response.status_code == 403
+
+    def test_search_keeps_role_filter(self, jwt_client, admin_user, student, instructor):
+        response = jwt_client(admin_user).get(
+            "/api/v1/users/", {"role": "instructor", "search": "test"}
+        )
+        assert response.status_code == 200
+        roles = {row["role"] for row in response.data["results"]}
+        assert roles <= {"instructor"}
 
     def test_admin_can_list_users(self, jwt_client, admin_user):
         response = jwt_client(admin_user).get("/api/v1/users/")

@@ -22,4 +22,6 @@ app.autodiscover_tasks()
 @app.task(bind=True, ignore_result=True)
 def debug_task(self) -> None:  # pragma: no cover - diagnostic helper
     """Trivial task used to confirm a worker is consuming the queue."""
-    print(f"Request: {self.request!r}")
+    from apps.core.logging import get_logger
+
+    get_logger(__name__).info("Debug task request: %r", self.request)

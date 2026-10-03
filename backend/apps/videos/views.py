@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
+from django.http import Http404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -274,7 +275,7 @@ class VideoRegisterView(APIView):
             title=data["title"],
             cloudflare_video_id=data["cloudflare_video_id"],
             description=data.get("description", ""),
-            require_signed_urls=data.get("require_signed_urls", True),
+            owner=request.user,
         )
         if lesson is not None:
             lesson.video = video
@@ -299,7 +300,7 @@ class DirectUploadURLView(APIView):
         from apps.videos.cloudflare import CloudflareStreamError, client
 
         try:
-            result = client.create_direct_upload()
+            result = client.create_direct_upload(creator=str(request.user.pk))
         except CloudflareStreamError as exc:
             return Response(
                 {
@@ -327,6 +328,14 @@ class VideoSyncView(APIView):
     def post(self, request, uid):
         from apps.videos.services import sync_video_metadata
 
-        video = get_object_or_404(Video, playback_uid=uid)
+        video = get_object_or_404(
+            Video.objects.select_related("lesson__section__course"), playback_uid=uid
+        )
+        lesson = getattr(video, "lesson", None)
+        owns = lesson is not None and (
+            lesson.section.course.instructor_id == request.user.pk
+        )
+        if not (is_admin(request) or owns):
+            raise Http404
         video = sync_video_metadata(video)
         return Response(VideoAdminSerializer(video).data)

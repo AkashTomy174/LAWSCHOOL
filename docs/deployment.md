@@ -103,7 +103,8 @@ RAZORPAY_WEBHOOK_SECRET=xxx
 
 CLOUDFLARE_ACCOUNT_ID=xxx
 CLOUDFLARE_API_TOKEN=xxx
-CLOUDFLARE_STREAM_SIGNING_KEY=key_id:secret
+CLOUDFLARE_STREAM_KEY_ID=xxx          # `id` from POST /stream/keys
+CLOUDFLARE_STREAM_SIGNING_KEY=xxx    # base64 `pem` (RSA private key) from the same call
 CLOUDFLARE_STREAM_CUSTOMER_CODE=xxx
 ```
 
@@ -134,7 +135,7 @@ Rotate on schedule and immediately on suspicion:
 | `JWT_SECRET`                    | logs every user out                                          |
 | `RAZORPAY_KEY_SECRET`           | requires a matching dashboard key update                     |
 | `RAZORPAY_WEBHOOK_SECRET`       | webhooks fail until the dashboard matches — do both together |
-| `CLOUDFLARE_STREAM_SIGNING_KEY` | new tokens use the new key; old ones expire within 300s      |
+| `CLOUDFLARE_STREAM_KEY_ID` + `CLOUDFLARE_STREAM_SIGNING_KEY` | new tokens use the new key; old ones expire within 300s      |
 
 ## 4. Nginx
 

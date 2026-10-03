@@ -168,6 +168,8 @@ class EmailVerifyView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
 
     @extend_schema(
         request={
@@ -268,10 +270,10 @@ class SessionHeartbeatView(APIView):
 
 
 class UserListView(generics.ListAPIView):
-    """GET /api/v1/users/ -- people directory for admins.
+    """GET /api/v1/users/ -- people directory, administrators only.
 
-    Admin-only: the rows carry every user's email and phone, which no student or
-    instructor needs in bulk.
+    The listing exposes every account's email and phone number, so it is not
+    available to students *or* instructors.  Results are paginated.
     """
 
     serializer_class = UserSerializer

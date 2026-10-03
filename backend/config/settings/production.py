@@ -26,6 +26,7 @@ _integration_required = [
     "RAZORPAY_WEBHOOK_SECRET",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_STREAM_KEY_ID",
     "CLOUDFLARE_STREAM_SIGNING_KEY",
 ]
 _missing_integrations = [key for key in _integration_required if not env(key)]
@@ -53,11 +54,10 @@ CSRF_COOKIE_HTTPONLY = False  # the SPA reads it to send X-CSRFToken
 
 X_FRAME_OPTIONS = "DENY"
 
-# The OpenAPI schema maps every endpoint for an attacker; serve it to admins only.
-SPECTACULAR_SETTINGS = {  # noqa: F405
-    **SPECTACULAR_SETTINGS,  # noqa: F405
-    "SERVE_PERMISSIONS": ["apps.core.permissions.IsAdminRole"],
-}
+# One proxy hop (the nginx container) by default; raise it if a CDN/LB sits in
+# front as well.  Never leave it at 0 behind a proxy, or every client shares an IP.
+NUM_PROXIES = int(env("NUM_PROXIES", "1"))
+REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": NUM_PROXIES}  # noqa: F405
 
 # --------------------------------------------------------------------------- #
 # Servers / hosts

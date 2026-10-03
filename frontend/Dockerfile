@@ -31,6 +31,7 @@ FROM nginx:1.27-alpine AS runtime
 
 # Static config only; no application code in this layer.
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY security-headers.conf csp.conf /etc/nginx/
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
