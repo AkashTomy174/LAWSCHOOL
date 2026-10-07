@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import AuthLayout from "../../components/AuthLayout";
 import {
   Button,
   Callout,
@@ -225,10 +226,20 @@ export function VerifyEmail() {
   }
 
   // Auto-verify on arrival: the student already clicked the link, so asking for a
-  // second click is pointless friction.
-  useState(() => {
-    if (uid && token) verify();
-  });
+  // second click is pointless friction.  The ref keeps StrictMode's double-invoked
+  // effect from spending the one-time token twice.
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    if (uid && token) {
+      verify();
+    } else {
+      setError("This verification link is incomplete. Request a new one from your profile.");
+      setState("error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <AuthLayout>

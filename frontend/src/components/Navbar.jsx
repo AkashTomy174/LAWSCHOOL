@@ -10,7 +10,7 @@ import Icon from "./Icon";
  * Application header.
  *
  * Links shown depend on who is signed in, but they are only navigation: every
- * protected page and endpoint re-checks authorisation on its own. Below `md` the
+ * protected page and endpoint re-checks authorisation on its own. Below `lg` the
  * links collapse behind a disclosure button, and the menu closes on navigation so
  * a student is never left staring at an open overlay on the next page.
  */
@@ -62,7 +62,7 @@ export default function Navbar() {
               <span className="brand-mark">§</span>LawSchool
             </Link>
 
-            <nav aria-label="Main" className="nav-links hidden md:flex">
+            <nav aria-label="Main" className="nav-links hidden lg:flex">
               {links.map((link) => (
                 <NavLink key={link.to} to={link.to} className={linkClass}>
                   {link.label}
@@ -121,7 +121,7 @@ export default function Navbar() {
 
             <button
               type="button"
-              className="btn btn-line !w-11 !px-0 md:hidden"
+              className="btn btn-line !w-11 !px-0 lg:hidden"
               aria-expanded={open}
               aria-controls="mobile-menu"
               aria-label={open ? "Close menu" : "Open menu"}
@@ -134,7 +134,7 @@ export default function Navbar() {
       </div>
 
       {open && (
-        <div id="mobile-menu" className="border-t border-line md:hidden">
+        <div id="mobile-menu" className="border-t border-line lg:hidden">
           <nav
             aria-label="Mobile"
             className="wrap nav-links flex-col !gap-0 py-3"
