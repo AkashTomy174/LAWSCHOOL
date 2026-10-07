@@ -213,7 +213,10 @@ class CourseProgressView(APIView):
     def get(self, request, slug):
         from apps.courses.models import Course
 
-        course = get_object_or_404(Course, slug=slug)
+        courses = Course.objects.all()
+        if not (is_admin(request) or getattr(request.user, "role", None) == "instructor"):
+            courses = courses.filter(status="published")
+        course = get_object_or_404(courses, slug=slug)
         rows = VideoProgress.objects.filter(
             user=request.user, lesson__section__course=course
         )

@@ -24,6 +24,28 @@ from apps.leaderboard.serializers import (
 _CACHE_TTL = 60
 
 
+def _my_standing(user) -> dict:
+    """The caller's rank + scores; shared so every endpoint agrees on the numbers."""
+    entry = getattr(user, "leaderboard_entry", None)
+    total_students = LeaderboardEntry.objects.filter(
+        user__role="student", user__is_active=True
+    ).count()
+    rank = lb.user_rank(user)
+    return {
+        "rank": rank,
+        "total_score": entry.total_score if entry else 0,
+        "quiz_score": entry.quiz_score if entry else 0,
+        "lessons_completed": entry.lessons_completed if entry else 0,
+        "courses_completed": entry.courses_completed if entry else 0,
+        # Share of students ranked below the caller.
+        "percentile": (
+            round(((total_students - rank) / total_students) * 100, 2)
+            if rank and total_students
+            else None
+        ),
+    }
+
+
 class LeaderboardView(generics.ListAPIView):
     """GET /api/v1/leaderboard/ -- paginated global ranking.
 
@@ -63,27 +85,7 @@ class LeaderboardView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         # My rank is computed with COUNT queries, not by scanning the table.
         page_response = super().list(request, *args, **kwargs)
-        entry = getattr(request.user, "leaderboard_entry", None)
-        total_students = LeaderboardEntry.objects.filter(
-            user__role="student", user__is_active=True
-        ).count()
-        my_rank = lb.user_rank(request.user)
-        page_response.data["me"] = {
-            "rank": my_rank,
-            "total_score": entry.total_score if entry else 0,
-            "quiz_score": entry.quiz_score if entry else 0,
-            "lessons_completed": entry.lessons_completed if entry else 0,
-            "courses_completed": entry.courses_completed if entry else 0,
-            "percentile": (
-                round(
-                    ((total_students - (my_rank or total_students)) / total_students)
-                    * 100,
-                    2,
-                )
-                if total_students
-                else None
-            ),
-        }
+        page_response.data["me"] = _my_standing(request.user)
         return page_response
 
 
@@ -116,25 +118,7 @@ class MyRankView(APIView):
 
     @extend_schema(responses={200: MyRankSerializer})
     def get(self, request):
-        entry = getattr(request.user, "leaderboard_entry", None)
-        total_students = LeaderboardEntry.objects.filter(
-            user__role="student", user__is_active=True
-        ).count()
-        rank = lb.user_rank(request.user)
-        return Response(
-            {
-                "rank": rank,
-                "total_score": entry.total_score if entry else 0,
-                "quiz_score": entry.quiz_score if entry else 0,
-                "lessons_completed": entry.lessons_completed if entry else 0,
-                "courses_completed": entry.courses_completed if entry else 0,
-                "percentile": (
-                    round(((total_students - rank + 1) / total_students) * 100, 2)
-                    if rank and total_students
-                    else None
-                ),
-            }
-        )
+        return Response(_my_standing(request.user))
 
 
 class LeaderboardSnapshotView(generics.ListAPIView):

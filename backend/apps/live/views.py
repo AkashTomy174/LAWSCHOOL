@@ -68,8 +68,14 @@ class CourseLiveClassListView(generics.ListAPIView):
 
     def get_queryset(self):
         course_slug = self.request.query_params.get("course")
-        course = get_object_or_404(Course, slug=course_slug) if course_slug else None
-        queryset = LiveClass.objects.filter(is_published=True).select_related("course")
+        course = (
+            get_object_or_404(Course, slug=course_slug, status="published")
+            if course_slug
+            else None
+        )
+        queryset = LiveClass.objects.filter(
+            is_published=True, course__status="published"
+        ).select_related("course")
         if course:
             queryset = queryset.filter(course=course)
         return queryset.order_by("scheduled_start")

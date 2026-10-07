@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -368,11 +369,6 @@ def process_webhook(
         raise PaymentError(
             {"detail": "Invalid webhook signature."}, code="invalid_signature"
         )
-        if not event.signature_valid:
-            # A row left behind by an older, unsigned request with this id.
-            event.signature_valid = True
-            event.payload = payload
-            event.save(update_fields=["signature_valid", "payload"])
 
     event, created = record_webhook_event(
         event_id=event_id,
@@ -527,11 +523,13 @@ def handle_payment_failed(payload: dict) -> dict:
 
 
 def handle_payment_refunded(payload: dict) -> dict:
-    """``refund.processed`` -- mark refunded and end access once fully refunded.
+    """``refund.processed`` -- record the refund; end the term once fully refunded.
 
-    A partial refund is recorded (refund id) but leaves the payment captured and
-    the subscription running: the customer paid for the term and got only some of
-    the money back.
+    Refunds are accumulated per refund id (so a redelivered event is not counted
+    twice): several partial refunds that add up to the full amount count as a
+    full refund.  A full refund removes *this payment's* term from the
+    subscription.  Renewals stack onto one subscription row, so cancelling the
+    row outright would also take away terms paid for by other payments.
     """
     refund_entity = ((payload.get("payload") or {}).get("refund") or {}).get(
         "entity"
@@ -539,32 +537,73 @@ def handle_payment_refunded(payload: dict) -> dict:
     payment_id = refund_entity.get("payment_id")
     if not payment_id:
         return {"matched": False}
-    payment = (
-        Payment.objects.select_related("user", "plan", "subscription")
-        .filter(provider_payment_id=payment_id)
-        .first()
-    )
-    if payment is None:
-        return {"matched": False}
 
-    payment.provider_refund_id = refund_entity.get("id", "")
-    refund_amount = refund_entity.get("amount")
-    if refund_amount is not None and int(refund_amount) < payment.amount_paise:
-        payment.save(update_fields=["provider_refund_id", "updated_at"])
-        return {"matched": True, "partial_refund": True}
+    with transaction.atomic():
+        payment = (
+            Payment.objects.select_for_update()
+            .select_related("user", "plan", "subscription")
+            .filter(provider_payment_id=payment_id)
+            .first()
+        )
+        if payment is None:
+            return {"matched": False}
+        if payment.status == PaymentStatus.REFUNDED:
+            return {"matched": True, "already_refunded": True}
 
-    payment.status = PaymentStatus.REFUNDED
-    payment.save(update_fields=["status", "provider_refund_id", "updated_at"])
+        refund_id = refund_entity.get("id", "")
+        provider_payload = payment.provider_payload or {}
+        refunds = dict(provider_payload.get("refunds") or {})
+        refund_amount = refund_entity.get("amount")
+        refunds[refund_id] = (
+            int(refund_amount) if refund_amount is not None else payment.amount_paise
+        )
+        payment.provider_refund_id = refund_id
+        payment.provider_payload = {**provider_payload, "refunds": refunds}
 
-    if (
-        payment.subscription_id
-        and payment.subscription.status == SubscriptionStatus.ACTIVE
-    ):
-        payment.subscription.status = SubscriptionStatus.CANCELLED
-        payment.subscription.end_date = timezone.now()
-        payment.subscription.save(update_fields=["status", "end_date", "updated_at"])
-        invalidate_entitlement_cache(payment.user)
+        if sum(refunds.values()) < payment.amount_paise:
+            payment.save(
+                update_fields=["provider_refund_id", "provider_payload", "updated_at"]
+            )
+            return {"matched": True, "partial_refund": True}
+
+        payment.status = PaymentStatus.REFUNDED
+        payment.save(
+            update_fields=[
+                "status",
+                "provider_refund_id",
+                "provider_payload",
+                "updated_at",
+            ]
+        )
+        _revoke_refunded_term(payment)
     return {"matched": True, "refunded": True}
+
+
+def _revoke_refunded_term(payment: Payment) -> None:
+    """Take the refunded payment's term off its subscription (inside a transaction)."""
+    if not payment.subscription_id:
+        return
+    subscription = Subscription.objects.select_for_update().get(
+        pk=payment.subscription_id
+    )
+    if subscription.status != SubscriptionStatus.ACTIVE:
+        return
+
+    now = timezone.now()
+    remaining_end = None
+    if subscription.end_date:
+        remaining_end = subscription.end_date - timedelta(
+            days=payment.plan.duration_days
+        )
+    if remaining_end is not None and remaining_end > now:
+        # Other paid terms remain on this row: shorten it, keep it active.
+        subscription.end_date = remaining_end
+        subscription.save(update_fields=["end_date", "updated_at"])
+    else:
+        subscription.status = SubscriptionStatus.CANCELLED
+        subscription.end_date = now
+        subscription.save(update_fields=["status", "end_date", "updated_at"])
+    invalidate_entitlement_cache(payment.user)
 
 
 def handle_subscription_charged(payload: dict) -> dict:
@@ -594,8 +633,6 @@ def reconcile_stale_payments(*, older_than_minutes: int = 30) -> int:
     Queries the gateway for the authoritative status and applies it through the
     same handler the webhook would use.  Run by Celery beat.
     """
-    from datetime import timedelta
-
     cutoff = timezone.now() - timedelta(minutes=older_than_minutes)
     stale = Payment.objects.filter(
         status__in=[PaymentStatus.CREATED, PaymentStatus.AUTHORIZED],

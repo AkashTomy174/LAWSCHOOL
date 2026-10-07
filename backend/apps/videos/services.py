@@ -29,6 +29,7 @@ from apps.core.constants import VideoStatus
 from apps.core.exceptions import (
     EntitlementError,
     PlaybackUnavailableError,
+    RateLimitedError,
     VideoNotReadyError,
 )
 from apps.core.logging import get_logger
@@ -123,7 +124,7 @@ def _enforce_rate_limit(user, *, scope: str, budget: int, window: int) -> None:
             "Playback/progress rate limit exceeded",
             extra={"user_id": str(user.pk), "scope": scope},
         )
-        raise EntitlementError(
+        raise RateLimitedError(
             {"detail": "Too many requests. Please slow down."}, code="rate_limited"
         )
 

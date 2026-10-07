@@ -93,7 +93,7 @@ class RefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "auth"
+    throttle_scope = "token_refresh"
 
 
 class LogoutView(APIView):

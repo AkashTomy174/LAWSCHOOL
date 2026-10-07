@@ -35,17 +35,6 @@ def is_admin(request) -> bool:
     )
 
 
-def client_ip(request) -> str | None:
-    """The caller's IP, trusting only ``NUM_PROXIES`` hops of X-Forwarded-For.
-
-    Reuses DRF's throttle identity so audit logs and rate limits agree; reading
-    the first X-Forwarded-For entry directly would let a client forge it.
-    """
-    from rest_framework.throttling import BaseThrottle
-
-    return BaseThrottle().get_ident(request) or None
-
-
 def is_schema_generation(view) -> bool:
     """True while drf-spectacular is building the OpenAPI document.
 

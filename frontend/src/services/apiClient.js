@@ -160,20 +160,31 @@ export async function refreshAccessToken() {
   if (!refresh) return Promise.reject(new Error("No refresh token available."));
 
   const baseURL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
-  refreshPromise = axios
-    .post(`${baseURL}${REFRESH_PATH}`, { refresh })
-    .then((response) => {
-      // ROTATE_REFRESH_TOKENS is on server-side, so a new refresh token comes back
-      // and the old one is blacklisted — both must be stored.
-      tokenStore.set({
-        access: response.data.access,
-        refresh: response.data.refresh || refresh,
-      });
-      return response.data.access;
-    })
-    .finally(() => {
-      refreshPromise = null;
+  const doRefresh = async () => {
+    // Another tab may have rotated the token while we waited for the lock. The
+    // token we read is then blacklisted, so reuse that tab's result instead.
+    const current = tokenStore.getRefresh();
+    if (current && current !== refresh) return tokenStore.getAccess();
+
+    const response = await axios.post(`${baseURL}${REFRESH_PATH}`, { refresh });
+    // ROTATE_REFRESH_TOKENS is on server-side, so a new refresh token comes back
+    // and the old one is blacklisted — both must be stored.
+    tokenStore.set({
+      access: response.data.access,
+      refresh: response.data.refresh || refresh,
     });
+    return response.data.access;
+  };
+
+  // Tabs share one localStorage, so they must also share one refresh: the Web
+  // Locks API serialises it across tabs (falls back to per-tab dedupe only).
+  refreshPromise = (
+    navigator.locks
+      ? navigator.locks.request("lawschool-token-refresh", doRefresh)
+      : doRefresh()
+  ).finally(() => {
+    refreshPromise = null;
+  });
 
   return refreshPromise;
 }

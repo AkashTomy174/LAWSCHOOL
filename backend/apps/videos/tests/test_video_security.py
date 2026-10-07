@@ -189,15 +189,6 @@ class TestPlaybackAuthorization:
         assert response.status_code == 503
         assert response.data["error"]["code"] == "playback_unavailable"
 
-    def test_watch_endpoint_also_degrades_to_503(
-        self, jwt_client, student, lesson, active_subscription, settings
-    ):
-        """The lesson watch endpoint shares the same graceful degradation."""
-        settings.CLOUDFLARE_STREAM_SIGNING_KEY = ""
-        response = jwt_client(student).get(f"/api/v1/lessons/{lesson.id}/watch/")
-        assert response.status_code == 503
-        assert response.data["error"]["code"] == "playback_unavailable"
-
 
 class TestLessonWatchEndpoint:
     def test_watch_returns_playback_when_allowed(

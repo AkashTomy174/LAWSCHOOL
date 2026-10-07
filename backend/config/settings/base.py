@@ -52,6 +52,8 @@ ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 # Number of trusted reverse proxies in front of the app.  DRF throttling and audit
 # logging use it to pick the client address out of X-Forwarded-For; with 0 the
 # header is ignored entirely, so it cannot be used to dodge rate limits.
+# This is the single source of truth: REST_FRAMEWORK below reads it, and so does
+# apps.core.network.client_ip.  Production raises the default to 1.
 NUM_PROXIES = int(env("NUM_PROXIES", "0"))
 
 # Application definition
@@ -202,12 +204,12 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.core.exceptions.lawschool_exception_handler",
     "DEFAULT_THROTTLE_CLASSES": ("rest_framework.throttling.ScopedRateThrottle",),
-    # Reverse proxies in front of the app (Railway edge = 1).  Unset, DRF keys
-    # throttles on the whole client-supplied X-Forwarded-For header, so a
-    # forged header per request would bypass every rate limit.
-    "NUM_PROXIES": int(env("NUM_PROXIES", "1")),
     "DEFAULT_THROTTLE_RATES": {
         "auth": "10/min",
+        # Refresh is keyed by IP too (no user yet), and a campus NAT puts hundreds
+        # of students behind one address.  A refresh token is a signed secret, so
+        # this limit only needs to stop floods, not guessing.
+        "token_refresh": "300/min",
         "payment": "30/min",
         "playback": "120/min",
         "progress": "120/min",

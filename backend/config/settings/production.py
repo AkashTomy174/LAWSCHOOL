@@ -65,5 +65,11 @@ REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": NUM_PROXIES}  # noqa: F405
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", [])
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
 
+# The OpenAPI schema and Swagger/Redoc UIs map every endpoint; admins only.
+SPECTACULAR_SETTINGS = {  # noqa: F405
+    **SPECTACULAR_SETTINGS,  # noqa: F405
+    "SERVE_PERMISSIONS": ["apps.core.permissions.IsAdminRole"],
+}
+
 EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 LOG_JSON = env_bool("LOG_JSON", True)

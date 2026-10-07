@@ -16,12 +16,13 @@
 services:
   postgres:
     # Not published to the host: only reachable on the internal network.
-    ports: []
+    # !reset is required: Compose merges lists across files, so a plain [] is a no-op.
+    ports: !reset []
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment}
 
   redis:
-    ports: []
+    ports: !reset []
 
   backend:
     build:
@@ -42,9 +43,11 @@ services:
       # (Local dev and tests use a fast hasher for speed.)
       LOG_JSON: "True"
       CELERY_TASK_ALWAYS_EAGER: "False"
-    volumes:
+    volumes: !override
       # No source bind-mount; the image is immutable.  Media only.
       - media_data:/app/media
+    # Only nginx is published; gunicorn is reached through it.
+    ports: !reset []
     restart: always
 
   # The worker scales horizontally: `docker compose up -d --scale celery=4`.
@@ -58,7 +61,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.production
       DEBUG: "False"
       LOG_JSON: "True"
-    volumes: []
+    volumes: !reset []
     restart: always
 
   # Exactly ONE beat instance may run.  `--scale celery-beat=2` would cause
@@ -74,7 +77,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.production
       DEBUG: "False"
       LOG_JSON: "True"
-    volumes: []
+    volumes: !reset []
     restart: always
 
   frontend:
@@ -87,7 +90,9 @@ services:
         VITE_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
         VITE_CLOUDFLARE_CUSTOMER_CODE: ${CLOUDFLARE_STREAM_CUSTOMER_CODE:-}
     environment: {}
-    volumes: []
-    ports:
+    volumes: !override
+      # Read-only view of the backend's uploads; nginx serves /media/ from here.
+      - media_data:/srv/media:ro
+    ports: !override
       - "${FRONTEND_PORT:-80}:80"
     restart: always

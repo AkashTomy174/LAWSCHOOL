@@ -15,7 +15,6 @@ from apps.core.network import client_ip
 from apps.core.permissions import (
     IsCourseOwnerOrAdmin,
     IsInstructorOrAdmin,
-    client_ip,
     is_admin,
     is_schema_generation,
 )
@@ -423,7 +422,9 @@ class QuizProgressView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        quiz = get_object_or_404(Quiz, pk=pk)
+        quiz = get_object_or_404(
+            Quiz, pk=pk, is_published=True, course__status="published"
+        )
         attempts = QuizAttempt.objects.filter(
             user=request.user, quiz=quiz, submitted_at__isnull=False
         )

@@ -555,9 +555,11 @@ class TestTokenSeparation:
 
 
 class TestClientIdentity:
-    def test_forged_forwarded_for_is_not_trusted(self, rf):
+    def test_forged_forwarded_for_is_not_trusted(self, rf, settings):
         """Only the hop our own proxy appended counts (NUM_PROXIES=1)."""
-        from apps.core.permissions import client_ip
+        from apps.core.network import client_ip
+
+        settings.NUM_PROXIES = 1
 
         request = rf.get(
             "/", HTTP_X_FORWARDED_FOR="6.6.6.6, 198.51.100.4", REMOTE_ADDR="10.0.0.1"

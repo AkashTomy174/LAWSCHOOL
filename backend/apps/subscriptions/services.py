@@ -247,7 +247,11 @@ def can_user_access_lesson(user, lesson) -> AccessDecision:
     if not (user and user.is_authenticated):
         # Preview lessons are the one thing an anonymous visitor may see, so the
         # course details page can advertise content without leaking video data.
-        if lesson.is_preview and lesson.status == LessonStatus.PUBLISHED:
+        if (
+            lesson.is_preview
+            and lesson.status == LessonStatus.PUBLISHED
+            and lesson.section.course.status == CourseStatus.PUBLISHED
+        ):
             return ALLOW_PREVIEW
         return DENY_ANONYMOUS
 
@@ -260,6 +264,10 @@ def can_user_access_lesson(user, lesson) -> AccessDecision:
 
     if lesson.status != LessonStatus.PUBLISHED:
         return DENY_LESSON_UNAVAILABLE
+    # Checked before the preview shortcut: a draft/archived course's previews
+    # are as unpublished as the rest of it.
+    if course.status != CourseStatus.PUBLISHED:
+        return DENY_NOT_PUBLISHED
 
     if lesson.is_preview:
         return ALLOW_PREVIEW

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.shortcuts import get_object_or_404
+from django.db.models import ProtectedError
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,9 +17,14 @@ from apps.subscriptions.serializers import (
     PlanSerializer,
     PlanWriteSerializer,
     SubscriptionAdminSerializer,
+    SubscriptionAdminUpdateSerializer,
     SubscriptionSerializer,
 )
-from apps.subscriptions.services import get_active_subscription
+from apps.core.exceptions import ConflictError
+from apps.subscriptions.services import (
+    get_active_subscription,
+    invalidate_entitlement_cache,
+)
 from apps.subscriptions.services_lifecycle import cancel_subscription
 
 
@@ -62,6 +67,18 @@ class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in {"PATCH", "PUT"}:
             return selectors.all_plans()
         return selectors.active_plans() | selectors.all_plans().filter(is_active=False)
+
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ConflictError(
+                {
+                    "detail": "This plan has payments or subscriptions and cannot be "
+                    "deleted. Deactivate it instead."
+                },
+                code="plan_in_use",
+            )
 
 
 class MySubscriptionView(APIView):
@@ -156,3 +173,17 @@ class AdminSubscriptionDetailView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsAdminRole]
     queryset = Subscription.objects.select_related("user", "plan")
     http_method_names = ["get", "patch", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.request.method == "PATCH":
+            return SubscriptionAdminUpdateSerializer
+        return SubscriptionAdminSerializer
+
+    def perform_update(self, serializer):
+        subscription = serializer.save()
+        invalidate_entitlement_cache(subscription.user)
+
+    def update(self, request, *args, **kwargs):
+        super().update(request, *args, **kwargs)
+        # Respond with the full admin shape, not just the writable fields.
+        return Response(SubscriptionAdminSerializer(self.get_object()).data)

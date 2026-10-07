@@ -7,6 +7,7 @@ classes and the entitlement service, then serialize.  No business rules live her
 from __future__ import annotations
 
 from django.db.models import Count
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -33,6 +34,22 @@ from apps.subscriptions.services import accessible_course_ids, can_user_access_c
 # --------------------------------------------------------------------------- #
 # Shared context helpers
 # --------------------------------------------------------------------------- #
+def _sees_drafts(request) -> bool:
+    """Admins and instructors may read draft/archived courses; nobody else."""
+    user = request.user
+    return is_admin(request) or (
+        user.is_authenticated and getattr(user, "role", None) == "instructor"
+    )
+
+
+def _visible_course_or_404(request, slug) -> Course:
+    """Course by slug with its tree prefetched, hiding drafts from students."""
+    course = selectors.course_detail(slug, published_only=not _sees_drafts(request))
+    if course is None:
+        raise Http404
+    return course
+
+
 def _progress_context(user, courses) -> dict:
     """Bulk-load completion state for one page of courses.
 
@@ -181,10 +198,7 @@ class CourseDetailView(generics.RetrieveUpdateAPIView):
         return Course.objects.select_related("instructor").filter(status="published")
 
     def get_object(self):
-        course = selectors.course_detail(self.kwargs["slug"])
-        if course is None:
-            # Staff need drafts too, which course_detail filters out.
-            course = get_object_or_404(self.get_queryset(), slug=self.kwargs["slug"])
+        course = _visible_course_or_404(self.request, self.kwargs["slug"])
         self.check_object_permissions(self.request, course)
         return course
 
@@ -217,9 +231,7 @@ class CourseLessonListView(APIView):
         responses={200: LessonListSerializer(many=True)},
     )
     def get(self, request, slug):
-        course = selectors.course_detail(slug) or get_object_or_404(
-            Course.objects.select_related("instructor"), slug=slug
-        )
+        course = _visible_course_or_404(request, slug)
         lessons = selectors.lessons_for_course(course)
         decision = can_user_access_course(request.user, course)
         context = _progress_context(request.user, [course])
@@ -257,9 +269,7 @@ class CourseAccessCheckView(APIView):
         responses={200: None},
     )
     def get(self, request, slug):
-        course = get_object_or_404(
-            Course.objects.select_related("instructor"), slug=slug
-        )
+        course = _visible_course_or_404(request, slug)
         decision = can_user_access_course(request.user, course)
         return Response(
             {
@@ -400,6 +410,9 @@ class LessonWatchView(APIView):
         from apps.subscriptions.services import can_user_access_lesson
 
         decision = can_user_access_lesson(request.user, lesson)
+        if decision.reason in {"lesson_unavailable", "not_published"}:
+            # Draft lessons / courses do not exist as far as students can tell.
+            raise Http404
         payload = {
             "lesson": {
                 "id": str(lesson.id),
@@ -427,13 +440,14 @@ class LessonWatchView(APIView):
             return Response(payload, status=status.HTTP_403_FORBIDDEN)
 
         if lesson.video_id:
-            from apps.videos.services import issue_playback_token
-
-            playback = issue_playback_token(
-                user=request.user, video=lesson.video, request=request
-            )
-            playback.pop(
-                "token", None
-            )  # token is delivered only by the dedicated endpoint
-            payload["playback"] = playback
+            # Only the identifier: the player fetches its signed token from
+            # /videos/<uid>/playback/, so this page load neither mints a token nor
+            # spends the student's playback budget.
+            video = lesson.video
+            payload["playback"] = {
+                "video_uid": str(video.playback_uid),
+                "status": video.status,
+                "thumbnail_url": video.thumbnail_url,
+                "duration_seconds": video.duration_seconds,
+            }
         return Response(payload)

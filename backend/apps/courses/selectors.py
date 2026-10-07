@@ -47,11 +47,14 @@ def all_courses_for_staff(
     return queryset
 
 
-def course_detail(slug: str) -> Course | None:
+def course_detail(slug: str, *, published_only: bool = True) -> Course | None:
     """Detail queryset with sections, lessons and quizzes prefetched.
 
     A fixed number of queries serves a whole course page regardless of size:
     1 (course) + 1 (sections) + 1 (lessons) + 1 (quizzes).
+
+    ``published_only`` hides draft/archived courses; only staff callers may
+    pass ``False``.
     """
     from apps.quizzes.models import Quiz
 
@@ -60,8 +63,11 @@ def course_detail(slug: str) -> Course | None:
         .filter(status=LessonStatus.PUBLISHED)
         .order_by("ordering")
     )
+    courses = Course.objects.filter(slug=slug)
+    if published_only:
+        courses = courses.filter(status=CourseStatus.PUBLISHED)
     return (
-        Course.objects.select_related("instructor")
+        courses.select_related("instructor")
         .prefetch_related(
             Prefetch(
                 "sections",
@@ -82,7 +88,6 @@ def course_detail(slug: str) -> Course | None:
                 to_attr="published_quizzes",
             ),
         )
-        .filter(slug=slug)
         .first()
     )
 
@@ -94,13 +99,18 @@ def lessons_for_course(course: Course) -> list[Lesson]:
     lesson page and the video player from re-reading the tree.
     """
     lessons: list[Lesson] = []
-    sections = getattr(course, "visible_sections", None) or course.sections.filter(
-        is_published=True
-    ).order_by("ordering")
+    # ``is None`` rather than ``or``: an empty prefetched list is a real answer,
+    # and falling back to ``section.lessons.all()`` would include draft lessons.
+    sections = getattr(course, "visible_sections", None)
+    if sections is None:
+        sections = course.sections.filter(is_published=True).order_by("ordering")
     for section in sections:
-        lessons.extend(
-            getattr(section, "visible_lessons", None) or section.lessons.all()
-        )
+        visible = getattr(section, "visible_lessons", None)
+        if visible is None:
+            visible = section.lessons.filter(status=LessonStatus.PUBLISHED).order_by(
+                "ordering"
+            )
+        lessons.extend(visible)
     return lessons
 
 

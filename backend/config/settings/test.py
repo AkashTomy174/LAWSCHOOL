@@ -72,6 +72,7 @@ REST_FRAMEWORK = {  # noqa: F405
     **REST_FRAMEWORK,  # noqa: F405
     "DEFAULT_THROTTLE_RATES": {
         "auth": "1000/min",
+        "token_refresh": "1000/min",
         "payment": "1000/min",
         "playback": "1000/min",
         "progress": "1000/min",

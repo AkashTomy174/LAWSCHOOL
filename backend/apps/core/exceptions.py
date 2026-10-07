@@ -83,6 +83,14 @@ class PlaybackUnavailableError(DomainError):
     default_code = "playback_unavailable"
 
 
+class RateLimitedError(DomainError):
+    """Too many requests for a per-user budget (playback tokens, progress)."""
+
+    status_code = 429
+    default_detail = "Too many requests. Please slow down."
+    default_code = "rate_limited"
+
+
 class ConflictError(DomainError):
     status_code = 409
     default_detail = "The request conflicts with the current state."

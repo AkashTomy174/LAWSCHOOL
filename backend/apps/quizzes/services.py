@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -128,15 +128,31 @@ def start_attempt(*, user, quiz: Quiz, ip_address: str | None = None) -> QuizAtt
         or 0
     )
 
-    attempt = QuizAttempt.objects.create(
-        user=user,
-        quiz=quiz,
-        attempt_number=last_number + 1,
-        started_at=timezone.now(),
-        max_score=quiz.total_marks,
-        ip_address=ip_address,
-    )
-    sample_attempt_questions(attempt)
+    try:
+        # Own savepoint: two tabs starting at once race on the unique
+        # (quiz, user, attempt_number) constraint; the loser must not 500.
+        with transaction.atomic():
+            attempt = QuizAttempt.objects.create(
+                user=user,
+                quiz=quiz,
+                attempt_number=last_number + 1,
+                started_at=timezone.now(),
+                max_score=quiz.total_marks,
+                ip_address=ip_address,
+            )
+            sample_attempt_questions(attempt)
+    except IntegrityError:
+        # The concurrent request won; resume the attempt it opened.
+        attempt = (
+            QuizAttempt.objects.filter(user=user, quiz=quiz, submitted_at__isnull=True)
+            .order_by("-attempt_number")
+            .first()
+        )
+        if attempt is None:
+            raise ConflictError(
+                {"detail": "An attempt was started elsewhere. Please retry."},
+                code="attempt_conflict",
+            )
     return attempt
 
 

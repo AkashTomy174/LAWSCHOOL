@@ -246,7 +246,11 @@ def user_rank(user) -> int | None:
     entry = getattr(user, "leaderboard_entry", None)
     if entry is None:
         return None
+    # Ranked against the same population the leaderboard lists, so "#3" here is
+    # the third row there.
     ahead = LeaderboardEntry.objects.filter(
+        user__role="student", user__is_active=True
+    ).filter(
         Q(total_score__gt=entry.total_score)
         | Q(
             total_score=entry.total_score, lessons_completed__gt=entry.lessons_completed
