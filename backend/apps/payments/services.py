@@ -540,7 +540,7 @@ def handle_payment_refunded(payload: dict) -> dict:
 
     with transaction.atomic():
         payment = (
-            Payment.objects.select_for_update()
+            Payment.objects.select_for_update(of=("self",))
             .select_related("user", "plan", "subscription")
             .filter(provider_payment_id=payment_id)
             .first()
