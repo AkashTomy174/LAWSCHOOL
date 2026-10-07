@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from django.db.models import Count, Prefetch, Q, QuerySet
 
-from apps.core.constants import CourseStatus, LessonStatus
+from apps.core.constants import CourseStatus, LessonStatus, UserRole
+from apps.core.permissions import is_admin_user
 from apps.courses.models import Course, Lesson, Section
 
 
@@ -33,11 +34,31 @@ def published_courses(
     return queryset
 
 
+def visible_courses(user) -> QuerySet[Course]:
+    """Every course ``user`` may *read*.  The single course-visibility rule.
+
+    * admins: every course
+    * instructors: published courses plus the ones they teach (their drafts)
+    * students and anonymous visitors: published courses only
+
+    An instructor's role alone never reveals drafts; ownership does.  This decides
+    whether a course can be looked up at all.  Whether its content may be consumed
+    is still ``can_user_access_course``'s call.
+    """
+    queryset = Course.objects.select_related("instructor")
+    if is_admin_user(user):
+        return queryset
+    published = Q(status=CourseStatus.PUBLISHED)
+    if user is not None and getattr(user, "role", None) == UserRole.INSTRUCTOR:
+        return queryset.filter(published | Q(instructor=user))
+    return queryset.filter(published)
+
+
 def all_courses_for_staff(
-    *, status: str | None = None, search: str | None = None
+    user, *, status: str | None = None, search: str | None = None
 ) -> QuerySet[Course]:
-    """Admin/instructor listing -- includes drafts, filterable."""
-    queryset = Course.objects.select_related("instructor").order_by("-created_at")
+    """The ``?scope=all`` listing: every course the caller may see, drafts included."""
+    queryset = visible_courses(user).order_by("-created_at")
     if status:
         queryset = queryset.filter(status=status)
     if search:
@@ -47,14 +68,14 @@ def all_courses_for_staff(
     return queryset
 
 
-def course_detail(slug: str, *, published_only: bool = True) -> Course | None:
+def course_detail(slug: str, *, user) -> Course | None:
     """Detail queryset with sections, lessons and quizzes prefetched.
 
     A fixed number of queries serves a whole course page regardless of size:
     1 (course) + 1 (sections) + 1 (lessons) + 1 (quizzes).
 
-    ``published_only`` hides draft/archived courses; only staff callers may
-    pass ``False``.
+    Only courses visible to ``user`` (see ``visible_courses``) are found; anything
+    else returns ``None``, exactly like a slug that does not exist.
     """
     from apps.quizzes.models import Quiz
 
@@ -63,11 +84,9 @@ def course_detail(slug: str, *, published_only: bool = True) -> Course | None:
         .filter(status=LessonStatus.PUBLISHED)
         .order_by("ordering")
     )
-    courses = Course.objects.filter(slug=slug)
-    if published_only:
-        courses = courses.filter(status=CourseStatus.PUBLISHED)
     return (
-        courses.select_related("instructor")
+        visible_courses(user)
+        .filter(slug=slug)
         .prefetch_related(
             Prefetch(
                 "sections",

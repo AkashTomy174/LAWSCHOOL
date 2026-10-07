@@ -25,7 +25,11 @@ def is_admin(request) -> bool:
     ``AttributeError`` and strip the endpoint's serializer from the OpenAPI
     document.
     """
-    user = getattr(request, "user", None)
+    return is_admin_user(getattr(request, "user", None))
+
+
+def is_admin_user(user) -> bool:
+    """``is_admin`` for code that has a user rather than a request (selectors)."""
     if user is None or not user.is_authenticated:
         return False
     return bool(

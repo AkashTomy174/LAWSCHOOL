@@ -211,12 +211,9 @@ class CourseProgressView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        from apps.courses.models import Course
+        from apps.courses.selectors import visible_courses
 
-        courses = Course.objects.all()
-        if not (is_admin(request) or getattr(request.user, "role", None) == "instructor"):
-            courses = courses.filter(status="published")
-        course = get_object_or_404(courses, slug=slug)
+        course = get_object_or_404(visible_courses(request.user), slug=slug)
         rows = VideoProgress.objects.filter(
             user=request.user, lesson__section__course=course
         )

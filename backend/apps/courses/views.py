@@ -34,17 +34,9 @@ from apps.subscriptions.services import accessible_course_ids, can_user_access_c
 # --------------------------------------------------------------------------- #
 # Shared context helpers
 # --------------------------------------------------------------------------- #
-def _sees_drafts(request) -> bool:
-    """Admins and instructors may read draft/archived courses; nobody else."""
-    user = request.user
-    return is_admin(request) or (
-        user.is_authenticated and getattr(user, "role", None) == "instructor"
-    )
-
-
 def _visible_course_or_404(request, slug) -> Course:
-    """Course by slug with its tree prefetched, hiding drafts from students."""
-    course = selectors.course_detail(slug, published_only=not _sees_drafts(request))
+    """Course by slug with its tree prefetched; 404 unless the caller may see it."""
+    course = selectors.course_detail(slug, user=request.user)
     if course is None:
         raise Http404
     return course
@@ -148,14 +140,14 @@ class CourseListView(generics.ListCreateAPIView):
         return super().get_permissions()
 
     def get_queryset(self):
-        user = self.request.user
         search = self.request.query_params.get("search")
-        # Instructors/admins can opt into drafts with ?scope=all.
-        if self.request.query_params.get("scope") == "all" and user.is_authenticated:
-            if is_admin(self.request) or getattr(user, "role", None) == "instructor":
-                return selectors.all_courses_for_staff(
-                    status=self.request.query_params.get("status"), search=search
-                )
+        # ?scope=all adds whatever drafts the caller may see (none for students).
+        if self.request.query_params.get("scope") == "all":
+            return selectors.all_courses_for_staff(
+                self.request.user,
+                status=self.request.query_params.get("status"),
+                search=search,
+            )
         return selectors.published_courses(search=search)
 
     def list(self, request, *args, **kwargs):
@@ -190,12 +182,7 @@ class CourseDetailView(generics.RetrieveUpdateAPIView):
         return super().get_permissions()
 
     def get_queryset(self):
-        user = self.request.user
-        if user.is_authenticated and (
-            is_admin(self.request) or getattr(user, "role", None) == "instructor"
-        ):
-            return Course.objects.select_related("instructor")
-        return Course.objects.select_related("instructor").filter(status="published")
+        return selectors.visible_courses(self.request.user)
 
     def get_object(self):
         course = _visible_course_or_404(self.request, self.kwargs["slug"])
