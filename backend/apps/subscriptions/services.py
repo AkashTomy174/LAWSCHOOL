@@ -124,8 +124,11 @@ def invalidate_entitlement_cache(user, *, course=None) -> None:
     the change is visible immediately rather than after the TTL.
 
     * ``entitlement:has_sub:<user>``  -- the coarse "has any subscription" flag
-    * ``entitlement:courses:<user>``  -- the bulk id set used by list pages
-    * ``entitlement:dec:<generation>:<user>:<course>`` -- per-course decision
+    * ``entitlement:courses:<plans>:<user>`` -- the bulk id set used by list pages
+    * ``entitlement:dec:<plans>:<generation>:<user>:<course>`` -- per-course decision
+
+    ``<plans>`` is the global plans generation (see ``bump_plans_generation``):
+    a plan change orphans every user's cached answers at once.
 
     The per-course key embeds a **generation counter** bumped here.  That is what
     makes invalidation complete without enumerating an unknown set of course
@@ -140,7 +143,7 @@ def invalidate_entitlement_cache(user, *, course=None) -> None:
         return
     user_id = getattr(user, "pk", user)
 
-    keys = [f"entitlement:has_sub:{user_id}", f"entitlement:courses:{user_id}"]
+    keys = [f"entitlement:has_sub:{user_id}", _courses_key(user_id)]
     if course is not None:
         # Targeted invalidation for a single course.
         keys.append(
@@ -169,7 +172,36 @@ def entitlement_generation(user_id) -> int:
 
 def _course_decision_key(user_id, course_id, generation: int) -> str:
     """Cache key for a single (user, course) entitlement decision."""
-    return f"entitlement:dec:{generation}:{user_id}:{course_id}"
+    return f"entitlement:dec:{plans_generation()}:{generation}:{user_id}:{course_id}"
+
+
+def _courses_key(user_id) -> str:
+    """Cache key for a user's bulk accessible-course id set."""
+    return f"entitlement:courses:{plans_generation()}:{user_id}"
+
+
+_PLANS_GENERATION_KEY = "entitlement:plans_generation"
+
+
+def plans_generation() -> int:
+    """Global counter bumped whenever any plan's coverage may have changed."""
+    return cache.get(_PLANS_GENERATION_KEY, 0)
+
+
+def bump_plans_generation(**_signal_kwargs) -> None:
+    """A plan changed: orphan every cached entitlement answer, for every user.
+
+    Which courses a plan covers (``courses``, ``is_all_access``) is baked into the
+    cached decisions, and a plan has an unknown number of subscribers, so a
+    per-user invalidation is not an option.  Without this, removing a course from
+    a plan left it watchable for up to the cache TTL (and adding one stayed locked).
+    Connected to Plan saves/deletes and ``Plan.courses`` changes in ``apps.py``,
+    which covers the API, the Django admin and the ORM alike.
+    """
+    try:
+        cache.incr(_PLANS_GENERATION_KEY)
+    except ValueError:
+        cache.set(_PLANS_GENERATION_KEY, 1, timeout=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +341,7 @@ def accessible_course_ids(user) -> set:
             ).values_list("id", flat=True)
         )
 
-    cache_key = f"entitlement:courses:{user.pk}"
+    cache_key = _courses_key(user.pk)
     cached = cache.get(cache_key)
     if cached is not None:
         return set(cached)
