@@ -87,3 +87,46 @@ def test_admin_api_plan_edit_revokes_access_immediately(
     assert not _allowed(student, course)
     access = auth_client(student).get(f"/api/v1/courses/{course.slug}/access/")
     assert access.json()["allowed"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Invalidation inside a transaction must survive a concurrent stale read
+# --------------------------------------------------------------------------- #
+def _cache_stale_allow(student, course):
+    """What a concurrent request does if it reads the pre-commit rows: it caches
+    "allowed" under whatever key is current at that moment."""
+    from django.core.cache import cache
+
+    from apps.subscriptions.services import _course_decision_key, entitlement_generation
+
+    key = _course_decision_key(student.pk, course.pk, entitlement_generation(student.pk))
+    cache.set(key, (True, "active_subscription", ""), 60)
+
+
+def test_plan_change_reinvalidates_after_commit(
+    student, course, plan, active_subscription, warm, django_capture_on_commit_callbacks
+):
+    """The M2M signal fires before commit; a stale answer cached in that gap used
+    to sit under the *new* generation for the full TTL."""
+    warm(True)
+    with django_capture_on_commit_callbacks(execute=True):
+        plan.courses.remove(course)
+        _cache_stale_allow(student, course)
+        assert _allowed(student, course)  # the race: stale answer is live here
+    assert not _allowed(student, course)  # ...and gone once the change commits
+
+
+def test_user_invalidation_reinvalidates_after_commit(
+    student, course, plan, active_subscription, warm, django_capture_on_commit_callbacks
+):
+    """Same race for per-user invalidation (refunds and cancellations run it
+    inside ``transaction.atomic``)."""
+    from apps.subscriptions.services import invalidate_entitlement_cache
+
+    warm(True)
+    with django_capture_on_commit_callbacks(execute=True):
+        active_subscription.status = "cancelled"
+        active_subscription.save(update_fields=["status"])
+        invalidate_entitlement_cache(student)
+        _cache_stale_allow(student, course)
+    assert not _allowed(student, course)

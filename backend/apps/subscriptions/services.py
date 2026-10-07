@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -142,7 +143,23 @@ def invalidate_entitlement_cache(user, *, course=None) -> None:
     if user is None:
         return
     user_id = getattr(user, "pk", user)
+    _now_and_after_commit(lambda: _invalidate(user_id, course))
 
+
+def _now_and_after_commit(invalidate) -> None:
+    """Run a cache invalidation now, and again once the transaction commits.
+
+    Now: so reads later in the same transaction (and tests) see the change.
+    After commit: a concurrent request that read the *pre-commit* rows between the
+    first invalidation and the commit may have cached that stale answer under the
+    new key; the second pass orphans it.  Outside a transaction ``on_commit`` runs
+    immediately, so this is just a harmless double invalidation.
+    """
+    invalidate()
+    transaction.on_commit(invalidate)
+
+
+def _invalidate(user_id, course) -> None:
     keys = [f"entitlement:has_sub:{user_id}", _courses_key(user_id)]
     if course is not None:
         # Targeted invalidation for a single course.
@@ -198,6 +215,10 @@ def bump_plans_generation(**_signal_kwargs) -> None:
     Connected to Plan saves/deletes and ``Plan.courses`` changes in ``apps.py``,
     which covers the API, the Django admin and the ORM alike.
     """
+    _now_and_after_commit(_incr_plans_generation)
+
+
+def _incr_plans_generation() -> None:
     try:
         cache.incr(_PLANS_GENERATION_KEY)
     except ValueError:
