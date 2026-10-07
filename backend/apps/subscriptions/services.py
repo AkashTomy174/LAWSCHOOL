@@ -106,6 +106,19 @@ def get_active_subscription(user):
     )
 
 
+def _cache_ttl(active) -> int:
+    """Cache lifetime for an answer derived from ``active`` (or no subscription).
+
+    Never outlives the subscription: an answer computed while it was active must
+    not be served after ``end_date``.  Natural expiry fires no event to invalidate
+    on, so the TTL itself is the guard.
+    """
+    if active is None or active.end_date is None:
+        return _ENTITLEMENT_CACHE_TTL
+    remaining = int((active.end_date - timezone.now()).total_seconds())
+    return max(1, min(_ENTITLEMENT_CACHE_TTL, remaining))
+
+
 def has_active_subscription(user) -> bool:
     if not (user and user.is_authenticated):
         return False
@@ -113,9 +126,9 @@ def has_active_subscription(user) -> bool:
     cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)
-    result = get_active_subscription(user) is not None
-    cache.set(cache_key, result, _ENTITLEMENT_CACHE_TTL)
-    return result
+    active = get_active_subscription(user)
+    cache.set(cache_key, active is not None, _cache_ttl(active))
+    return active is not None
 
 
 def invalidate_entitlement_cache(user, *, course=None) -> None:
@@ -287,7 +300,7 @@ def _subscription_decision(user, course) -> AccessDecision:
     cache.set(
         cache_key,
         (decision.allowed, decision.reason, decision.detail),
-        _ENTITLEMENT_CACHE_TTL,
+        _cache_ttl(active),
     )
     return decision
 
@@ -367,6 +380,7 @@ def accessible_course_ids(user) -> set:
     if cached is not None:
         return set(cached)
 
+    active = None
     if user.role == UserRole.ADMIN or user.is_staff:
         ids = set(Course.objects.values_list("id", flat=True))
     else:
@@ -399,7 +413,7 @@ def accessible_course_ids(user) -> set:
 
         ids = free_ids | owned_ids | subscription_ids
 
-    cache.set(cache_key, list(ids), _ENTITLEMENT_CACHE_TTL)
+    cache.set(cache_key, list(ids), _cache_ttl(active))
     return ids
 
 
