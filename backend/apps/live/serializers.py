@@ -22,7 +22,8 @@ class LiveClassSerializer(serializers.ModelSerializer):
             "instructor",
             "is_published",
         )
-        read_only_fields = ("id",)
+        # Derived from the course on save (see LiveClass.save).
+        read_only_fields = ("id", "instructor")
 
 
 class LiveClassPublicSerializer(serializers.ModelSerializer):

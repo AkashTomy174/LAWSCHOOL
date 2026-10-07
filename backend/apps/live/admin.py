@@ -15,3 +15,4 @@ class LiveClassAdmin(admin.ModelAdmin):
     list_filter = ("meeting_provider", "is_published", "course")
     search_fields = ("title", "course__title")
     list_select_related = ("course", "instructor")
+    readonly_fields = ("instructor",)  # derived from the course on save

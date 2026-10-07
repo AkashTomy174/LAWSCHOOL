@@ -63,3 +63,11 @@ class LiveClass(models.Model):
 
     def __str__(self) -> str:
         return f"{self.course.title} -- {self.title}"
+
+    def save(self, *args, **kwargs):
+        # The host is always the course's instructor, never a client-chosen user.
+        # Set here so the API, the Django admin and the ORM all agree.
+        self.instructor_id = self.course.instructor_id
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {*kwargs["update_fields"], "instructor"}
+        super().save(*args, **kwargs)
