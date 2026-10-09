@@ -74,23 +74,6 @@ describe("subscriptionService.plans", () => {
   });
 });
 
-describe("subscriptionService.all", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("unwraps the paginated envelope for the admin listing", async () => {
-    apiClient.get.mockResolvedValue({
-      data: { count: 1, results: [{ id: "s1", status: "active" }] },
-    });
-
-    const subscriptions = await subscriptionService.all();
-
-    expect(Array.isArray(subscriptions)).toBe(true);
-    expect(subscriptions[0].status).toBe("active");
-  });
-});
-
 describe("subscriptionService.mine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,5 +93,26 @@ describe("subscriptionService.mine", () => {
 
     expect(Array.isArray(mine)).toBe(false);
     expect(mine.active.plan.name).toBe("Foundations");
+  });
+});
+
+describe("subscriptionService.all (admin)", () => {
+  /**
+   * Unlike ``plans()``, the admin list keeps the pagination envelope: the admin
+   * table reads ``results`` and the dashboard reads ``count``.  Unwrapping it to
+   * an array once made the admin Subscriptions table permanently empty.
+   */
+  beforeEach(() => vi.clearAllMocks());
+
+  it("keeps the paginated envelope and passes filters through", async () => {
+    const envelope = { count: 3, next: null, previous: null, results: [{ id: "s1" }] };
+    apiClient.get.mockResolvedValue({ data: envelope });
+
+    const result = await subscriptionService.all({ status: "active", page_size: 1 });
+
+    expect(result).toEqual(envelope);
+    expect(apiClient.get).toHaveBeenCalledWith("/subscriptions/", {
+      params: { status: "active", page_size: 1 },
+    });
   });
 });

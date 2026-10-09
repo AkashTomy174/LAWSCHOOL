@@ -67,9 +67,10 @@ export const subscriptionService = {
   },
 
   /* ---- admin ---- */
+  /** Paginated (``{count, results}``): admin pages need the total count too. */
   async all(params = {}) {
     const response = await apiClient.get("/subscriptions/", { params });
-    return unwrapList(response.data);
+    return response.data;
   },
 };
 

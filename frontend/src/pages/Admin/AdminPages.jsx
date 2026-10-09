@@ -31,7 +31,7 @@ export default function AdminDashboard() {
       await Promise.all([
         courseService.list({ scope: "all", page_size: 1 }),
         userService.list({ page_size: 1 }),
-        subscriptionService.all({ page_size: 1 }),
+        subscriptionService.all({ status: "active", page_size: 1 }),
         paymentService.all({ page_size: 1 }),
         videoService.list(),
         quizService.list(),
@@ -44,14 +44,11 @@ export default function AdminDashboard() {
     return {
       courses: courses.count,
       users: users.count,
-      subscriptions: subscriptions.count,
       payments: payments.count,
       videos: (videos || []).length,
       quizzes: (quizzes || []).length,
       attempts: attempts.count,
-      activeSubscriptions: (subscriptions.results || []).filter(
-        (r) => r.status === "active",
-      ).length,
+      activeSubscriptions: subscriptions.count,
       capturedTotal: captured.reduce(
         (sum, row) => sum + Number(row.amount || 0),
         0,
@@ -369,6 +366,13 @@ export function AdminSubscriptions() {
                   </td>
                 </tr>
               ))}
+              {(subscriptions.data?.results || []).length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-center text-ink3">
+                    No subscriptions yet.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </Panel>
