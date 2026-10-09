@@ -91,6 +91,15 @@ class RateLimitedError(DomainError):
     default_code = "rate_limited"
 
 
+class TemporarilyUnavailableError(DomainError):
+    """A dependency this endpoint will not run without is down (e.g. the cache
+    behind the login throttle).  503 so clients retry rather than give up."""
+
+    status_code = 503
+    default_detail = "This service is temporarily unavailable. Please try again shortly."
+    default_code = "service_unavailable"
+
+
 class ConflictError(DomainError):
     status_code = 409
     default_detail = "The request conflicts with the current state."

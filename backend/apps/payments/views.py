@@ -22,9 +22,9 @@ from rest_framework import generics, status
 from rest_framework.parsers import JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.core.throttling import ResilientScopedRateThrottle
 from apps.core.exceptions import PaymentError, code_for, message_for
 from apps.core.logging import get_logger
 from apps.core.permissions import IsAdminRole, is_schema_generation
@@ -47,7 +47,7 @@ class CreateOrderView(APIView):
     """POST /api/v1/payments/orders/ -- create a Razorpay order for a plan."""
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "payment"
 
     @extend_schema(request=CreateOrderSerializer, responses={201: CheckoutSerializer})
@@ -78,7 +78,7 @@ class VerifyPaymentView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "payment"
 
     @extend_schema(request=VerifyPaymentSerializer, responses={200: PaymentSerializer})
@@ -113,7 +113,7 @@ class PaymentWebhookView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
     parser_classes = [JSONParser]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "webhook"
 
     @extend_schema(

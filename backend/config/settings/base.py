@@ -203,7 +203,9 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.core.exceptions.lawschool_exception_handler",
-    "DEFAULT_THROTTLE_CLASSES": ("rest_framework.throttling.ScopedRateThrottle",),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "apps.core.throttling.ResilientScopedRateThrottle",
+    ),
     "DEFAULT_THROTTLE_RATES": {
         "auth": "10/min",
         # Refresh is keyed by IP too (no user yet), and a campus NAT puts hundreds
@@ -285,7 +287,12 @@ else:
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": CACHE_REDIS_URL,
-            "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                # Fail fast: a hung cache must not hang requests (see apps.core.cache).
+                "SOCKET_CONNECT_TIMEOUT": 1,
+                "SOCKET_TIMEOUT": 1,
+            },
             "KEY_PREFIX": "lawschool",
             "TIMEOUT": 300,
         }

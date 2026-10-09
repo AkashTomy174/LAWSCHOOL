@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnl
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.cache import cache_delete_many, cache_get, cache_set
 from apps.core.pagination import StandardResultsSetPagination
 from apps.core.permissions import IsAdminRole
 from apps.leaderboard import models as lb
@@ -102,12 +103,12 @@ class LeaderboardTopView(APIView):
         # Clamped both ways: a negative slice raises inside the ORM (HTTP 500).
         limit = max(1, min(limit, 50))
         cache_key = f"leaderboard:top:{limit}"
-        cached = cache.get(cache_key)
+        cached = cache_get(cache_key)
         if cached is None:
             cached = LeaderboardEntrySerializer(
                 lb.top_entries(limit=limit), many=True, context={"request": request}
             ).data
-            cache.set(cache_key, cached, _CACHE_TTL)
+            cache_set(cache_key, cached, _CACHE_TTL)
         return Response({"results": cached, "me": {"rank": lb.user_rank(request.user)}})
 
 
@@ -149,5 +150,5 @@ class RecalculateLeaderboardView(APIView):
         from apps.leaderboard.models import recalculate_leaderboard
 
         count = recalculate_leaderboard()
-        cache.delete_many([f"leaderboard:top:{n}" for n in range(1, 51)])
+        cache_delete_many([f"leaderboard:top:{n}" for n in range(1, 51)])
         return Response({"detail": f"Recalculated {count} ranking rows."})

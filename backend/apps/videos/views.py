@@ -9,9 +9,9 @@ from django.http import Http404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.core.throttling import ResilientScopedRateThrottle
 from apps.core.logging import get_logger
 from apps.core.permissions import (
     IsAdminRole,
@@ -86,7 +86,7 @@ class VideoPlaybackView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "playback"
 
     @extend_schema(
@@ -105,7 +105,7 @@ class LessonPlaybackView(APIView):
     """GET /api/v1/videos/lessons/<lesson_id>/playback/ -- convenience for the player."""
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "playback"
 
     @extend_schema(
@@ -144,7 +144,7 @@ class VideoProgressUpdateView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ResilientScopedRateThrottle]
     throttle_scope = "progress"
 
     def post(self, request, uid):

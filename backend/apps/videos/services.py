@@ -25,6 +25,7 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
+from apps.core.cache import cache_set, report_cache_failure
 from apps.core.constants import VideoStatus
 from apps.core.exceptions import (
     EntitlementError,
@@ -111,13 +112,18 @@ def _enforce_rate_limit(user, *, scope: str, budget: int, window: int) -> None:
     to stop scripted harvesting, not to shape traffic precisely.
     """
     key = f"ratelimit:{scope}:{user.pk}:{int(timezone.now().timestamp()) // window}"
-    added = cache.add(key, 1, window)
-    if added:
-        return
     try:
+        added = cache.add(key, 1, window)
+        if added:
+            return
         count = cache.incr(key)
     except ValueError:  # key expired between add and incr
-        cache.set(key, 1, window)
+        cache_set(key, 1, window)
+        return
+    except Exception as exc:
+        # Anti-harvesting only: entitlement is already checked, so with the
+        # cache down this fails open rather than blocking all playback.
+        report_cache_failure("ratelimit", exc)
         return
     if count > budget:
         logger.warning(

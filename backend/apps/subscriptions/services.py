@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from django.core.cache import cache
+
+from apps.core.cache import cache_delete_many, cache_set, report_cache_failure
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -140,12 +142,36 @@ def has_active_subscription(user) -> bool:
     if not (user and user.is_authenticated):
         return False
     cache_key = f"entitlement:has_sub:{user.pk}"
-    cached = cache.get(cache_key)
+    cached = _cached(lambda: cache.get(cache_key))
     if cached is not None:
         return bool(cached)
     subscriptions = active_subscriptions(user)
-    cache.set(cache_key, bool(subscriptions), _cache_ttl(_earliest_end(subscriptions)))
+    cache_set(cache_key, bool(subscriptions), _cache_ttl(_earliest_end(subscriptions)))
     return bool(subscriptions)
+
+
+# The entitlement cache is only an optimisation: if Redis is unreachable every
+# answer is computed from the database, and a cache failure can never turn a
+# denial into an allow.  Any failure building a key (the generation counters
+# live in the cache too) or reading it skips the cache for that request.
+_UNAVAILABLE = object()
+
+
+def _cached(read):
+    """Run a cache read; ``None`` on a miss *or* when the cache is down."""
+    try:
+        return read()
+    except Exception as exc:
+        report_cache_failure("get", exc)
+        return None
+
+
+def _key_or_unavailable(build):
+    try:
+        return build()
+    except Exception as exc:
+        report_cache_failure("get", exc)
+        return _UNAVAILABLE
 
 
 def invalidate_entitlement_cache(user, *, course=None) -> None:
@@ -190,21 +216,35 @@ def _now_and_after_commit(invalidate) -> None:
 
 
 def _invalidate(user_id, course) -> None:
-    keys = [f"entitlement:has_sub:{user_id}", _courses_key(user_id)]
-    if course is not None:
-        # Targeted invalidation for a single course.
-        keys.append(
-            _course_decision_key(user_id, course.pk, entitlement_generation(user_id))
-        )
-    cache.delete_many(keys)
+    # Never raises: a failed invalidation must not roll back the subscription
+    # change that triggered it.  While the cache is down nothing is cached, and
+    # anything written just before the outage expires within the TTL.
+    try:
+        keys = [f"entitlement:has_sub:{user_id}", _courses_key(user_id)]
+        if course is not None:
+            # Targeted invalidation for a single course.
+            keys.append(
+                _course_decision_key(user_id, course.pk, entitlement_generation(user_id))
+            )
+    except Exception as exc:
+        report_cache_failure("delete_many", exc)
+        return
+    cache_delete_many(keys)
 
     if course is None:
         # Bump the generation, orphaning every per-course entry for this user.
-        try:
-            cache.incr(_generation_key(user_id))
-        except ValueError:
-            # Key absent (first invalidation, or it expired): start at 1.
-            cache.set(_generation_key(user_id), 1, timeout=None)
+        _incr_forever(_generation_key(user_id))
+
+
+def _incr_forever(key) -> None:
+    """Increment a never-expiring counter, creating it at 1; never raises."""
+    try:
+        cache.incr(key)
+    except ValueError:
+        # Key absent (first increment, or evicted): start at 1.
+        cache_set(key, 1, None)
+    except Exception as exc:
+        report_cache_failure("incr", exc)
 
 
 def _generation_key(user_id) -> str:
@@ -249,10 +289,7 @@ def bump_plans_generation(**_signal_kwargs) -> None:
 
 
 def _incr_plans_generation() -> None:
-    try:
-        cache.incr(_PLANS_GENERATION_KEY)
-    except ValueError:
-        cache.set(_PLANS_GENERATION_KEY, 1, timeout=None)
+    _incr_forever(_PLANS_GENERATION_KEY)
 
 
 # --------------------------------------------------------------------------- #
@@ -288,10 +325,10 @@ def _subscription_decision(user, course) -> AccessDecision:
     """Evaluate subscription coverage, distinguishing 'none' from 'expired'."""
     # The generation counter is read on every call so an invalidation performed by
     # another process immediately stops this key from being written or honoured.
-    cache_key = _course_decision_key(
-        user.pk, course.pk, entitlement_generation(user.pk)
+    cache_key = _key_or_unavailable(
+        lambda: _course_decision_key(user.pk, course.pk, entitlement_generation(user.pk))
     )
-    cached = cache.get(cache_key)
+    cached = None if cache_key is _UNAVAILABLE else _cached(lambda: cache.get(cache_key))
     if cached is not None:
         # ``*rest``: entries written before ``expires_at`` existed are 3-tuples.
         allowed, reason, detail, *rest = cached
@@ -317,11 +354,12 @@ def _subscription_decision(user, course) -> AccessDecision:
             else DENY_NO_SUBSCRIPTION
         )
 
-    cache.set(
-        cache_key,
-        (decision.allowed, decision.reason, decision.detail, decision.expires_at),
-        _cache_ttl(decision.expires_at),
-    )
+    if cache_key is not _UNAVAILABLE:
+        cache_set(
+            cache_key,
+            (decision.allowed, decision.reason, decision.detail, decision.expires_at),
+            _cache_ttl(decision.expires_at),
+        )
     return decision
 
 
@@ -409,8 +447,8 @@ def accessible_course_ids(user) -> set:
             ).values_list("id", flat=True)
         )
 
-    cache_key = _courses_key(user.pk)
-    cached = cache.get(cache_key)
+    cache_key = _key_or_unavailable(lambda: _courses_key(user.pk))
+    cached = None if cache_key is _UNAVAILABLE else _cached(lambda: cache.get(cache_key))
     if cached is not None:
         return set(cached)
 
@@ -448,7 +486,8 @@ def accessible_course_ids(user) -> set:
         ids = free_ids | owned_ids | subscription_ids
 
     # The set shrinks as soon as *any* contributing subscription ends.
-    cache.set(cache_key, list(ids), _cache_ttl(_earliest_end(subscriptions)))
+    if cache_key is not _UNAVAILABLE:
+        cache_set(cache_key, list(ids), _cache_ttl(_earliest_end(subscriptions)))
     return ids
 
 
