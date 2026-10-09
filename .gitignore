@@ -112,8 +112,8 @@ vite.out.log
 vite.err.log
 
 # --- Editors / OS -----------------------------------------------------------
+# settings.json stays local: editor extensions store API keys in it.
 .vscode/*
-!.vscode/settings.json
 !.vscode/extensions.json
 .idea/
 *.swp
