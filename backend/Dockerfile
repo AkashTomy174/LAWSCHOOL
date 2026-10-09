@@ -25,7 +25,7 @@ WORKDIR /wheels
 COPY requirements/ ./requirements/
 # Build wheels once, then install them in the runtime stage without a compiler.
 RUN pip install --upgrade pip wheel && \
-    pip wheel --wheel-dir /wheels -r requirements/base.txt
+    pip wheel --wheel-dir /wheels -r requirements/production.txt
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ WORKDIR /app
 
 COPY --from=builder /wheels /wheels
 COPY requirements/ ./requirements/
-RUN pip install --no-index --find-links=/wheels -r requirements/base.txt && \
+RUN pip install --no-index --find-links=/wheels -r requirements/production.txt && \
     rm -rf /wheels
 
 COPY . .

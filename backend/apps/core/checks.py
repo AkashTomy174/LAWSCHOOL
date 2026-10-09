@@ -9,6 +9,25 @@ _NON_DELIVERING = ("console", "locmem", "dummy", "filebased")
 
 
 @register("lawschool")
+def check_media_storage(app_configs, **kwargs) -> list:
+    """Warn when production keeps uploads on the container filesystem."""
+    if not getattr(settings, "PERSISTENT_MEDIA_REQUIRED", False):
+        return []
+    if settings.STORAGES["default"]["BACKEND"].endswith("FileSystemStorage"):
+        return [
+            Warning(
+                "Uploaded media is stored on the container filesystem.",
+                hint="Set AWS_STORAGE_BUCKET_NAME, AWS_S3_ENDPOINT_URL, "
+                "AWS_S3_REGION_NAME, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+                "for S3-compatible storage. Until then uploads are lost on every "
+                "deploy and /media/ is not served (DEBUG is off).",
+                id="lawschool.W003",
+            )
+        ]
+    return []
+
+
+@register("lawschool")
 def check_email_delivery(app_configs, **kwargs) -> list:
     """Warn when production cannot actually deliver email.
 

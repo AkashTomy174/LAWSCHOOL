@@ -84,4 +84,33 @@ EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBacken
 # Password reset and verification need real delivery: apps.core.checks warns
 # (in ``check`` and the pre-deploy ``migrate``) when it is not configured.
 EMAIL_DELIVERY_REQUIRED = True
+
+# --------------------------------------------------------------------------- #
+# Uploaded media (avatars, course thumbnails)
+# --------------------------------------------------------------------------- #
+# The container filesystem is wiped on every deploy and Django does not serve
+# /media/ with DEBUG off, so production uploads belong in S3-compatible object
+# storage (a Railway Bucket, Cloudflare R2, AWS S3...).  The bucket stays
+# private: every media URL is a short-lived signed link on the bucket's own
+# domain, so an uploaded file never executes on the app's origin.
+# apps.core.checks warns while this is not configured.
+PERSISTENT_MEDIA_REQUIRED = True
+if env("AWS_STORAGE_BUCKET_NAME"):
+    STORAGES = {  # noqa: F405
+        **STORAGES,  # noqa: F405
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {
+                "bucket_name": env("AWS_STORAGE_BUCKET_NAME"),
+                "endpoint_url": env("AWS_S3_ENDPOINT_URL") or None,
+                "region_name": env("AWS_S3_REGION_NAME") or None,
+                "access_key": env("AWS_ACCESS_KEY_ID"),
+                "secret_key": env("AWS_SECRET_ACCESS_KEY"),
+                "default_acl": None,
+                "querystring_auth": True,
+                "querystring_expire": 3600,
+                "file_overwrite": False,
+            },
+        },
+    }
 LOG_JSON = env_bool("LOG_JSON", True)
