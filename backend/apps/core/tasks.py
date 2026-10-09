@@ -107,12 +107,16 @@ def sync_pending_videos(limit: int = 50) -> int:
     There is no Cloudflare webhook receiver, so this task (plus the manual sync
     endpoint) is how an asset flips to READY and a lesson becomes playable.
     """
+    from django.db.models import Q
+
     from apps.core.constants import VideoStatus
     from apps.videos.models import Video
     from apps.videos.services import sync_video_metadata
 
+    # Also retry assets whose signed-only enforcement has not been confirmed.
     pending = Video.objects.filter(
-        status__in=[VideoStatus.PENDING, VideoStatus.PROCESSING]
+        Q(status__in=[VideoStatus.PENDING, VideoStatus.PROCESSING])
+        | Q(require_signed_urls=False)
     )[:limit]
 
     synced = 0

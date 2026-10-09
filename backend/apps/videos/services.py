@@ -148,6 +148,15 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
 
     if video.status != VideoStatus.READY:
         raise VideoNotReadyError()
+    if not video.require_signed_urls:
+        # Cloudflare has not confirmed this asset is signed-only, so its raw id
+        # (readable in any token's ``sub`` claim) might stream without a token.
+        # Fail closed until the sync task manages to enforce it.
+        logger.error(
+            "Playback refused: asset not confirmed signed-only",
+            extra={"video_id": str(video.pk)},
+        )
+        raise PlaybackUnavailableError()
 
     _enforce_rate_limit(
         user,
@@ -161,10 +170,16 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
     # server-side) instead of letting the exception escape as an unhandled 500 -- in
     # DEBUG that would render a full stack trace, and in production it would be an
     # opaque error page.  The student sees "temporarily unavailable"; we see why.
+    # A token must not outlive the access that justified it (Cloudflare checks
+    # ``exp``; it cannot revoke a token early).
+    ttl = settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL
+    if decision.expires_at is not None:
+        remaining = int((decision.expires_at - timezone.now()).total_seconds())
+        ttl = max(1, min(ttl, remaining))
     try:
         token, expires_at = build_signed_playback_token(
             video_uid=video.cloudflare_video_id,
-            ttl_seconds=settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL,
+            ttl_seconds=ttl,
             downloadable=False,
         )
     except CloudflareStreamError:
@@ -207,7 +222,7 @@ def issue_playback_token(*, user, video: Video, request=None) -> dict:
         "duration_seconds": video.duration_seconds,
         "token": token,
         "token_expires_at": expires_at,
-        "expires_in": settings.CLOUDFLARE_PLAYBACK_TOKEN_TTL,
+        "expires_in": ttl,
     }
 
 
@@ -331,14 +346,20 @@ def sync_video_metadata(video: Video) -> Video:
         "queued": VideoStatus.PROCESSING,
         "error": VideoStatus.FAILED,
     }
-    video.status = status_map.get(payload.get("status", ""), video.status)
+    # Cloudflare reports ``status`` as an object: {"state": "ready", ...}.
+    state = payload.get("status") or ""
+    error_text = ""
+    if isinstance(state, dict):
+        error_text = str(state.get("errorReasonText") or "")
+        state = state.get("state") or ""
+    video.status = status_map.get(state, video.status)
     video.duration_seconds = int(payload.get("duration") or video.duration_seconds or 0)
     video.thumbnail_url = payload.get("thumbnail") or video.thumbnail_url
-    video.processing_error = (
-        str((payload.get("status") or {}).get("errorReasonText") or "")
-        if isinstance(payload.get("status"), dict)
-        else ""
-    )
+    video.processing_error = error_text
+    # Re-enforce signed-only whenever it is unconfirmed or Cloudflare says the
+    # asset is public; record the outcome either way.
+    if payload.get("requireSignedURLs") is False or not video.require_signed_urls:
+        video.require_signed_urls = _enforce_signed_only(video)
     video.last_synced_at = timezone.now()
     video.save(
         update_fields=[
@@ -346,11 +367,25 @@ def sync_video_metadata(video: Video) -> Video:
             "duration_seconds",
             "thumbnail_url",
             "processing_error",
+            "require_signed_urls",
             "last_synced_at",
             "updated_at",
         ]
     )
     return video
+
+
+def _enforce_signed_only(video: Video) -> bool:
+    """Ask Cloudflare to require signed URLs; True only once it has accepted."""
+    try:
+        client.update_video(video.cloudflare_video_id, require_signed_urls=True)
+    except CloudflareStreamError:
+        logger.exception(
+            "Failed to mark Cloudflare asset as signed-only; will retry on sync",
+            extra={"video_id": str(video.pk)},
+        )
+        return False
+    return True
 
 
 def register_video(
@@ -382,20 +417,15 @@ def register_video(
         if str(remote.get("creator") or "") != str(owner.pk):
             raise PermissionDenied("You can only register videos you uploaded.")
 
+    # ``require_signed_urls`` records what Cloudflare has *confirmed*: it starts
+    # false and playback stays closed until enforcement succeeds (here, or on a
+    # later sync).
     video = Video.objects.create(
         title=title,
         description=description,
         cloudflare_video_id=cloudflare_video_id,
-        require_signed_urls=True,
+        require_signed_urls=False,
     )
-    try:
-        client.update_video(cloudflare_video_id, require_signed_urls=True)
-    except CloudflareStreamError:
-        # Non-fatal: the row exists and the sync task can retry.  The playback
-        # endpoint only ever hands out signed tokens and stays closed until the
-        # asset is READY regardless.
-        logger.exception(
-            "Failed to mark Cloudflare asset as signed-only",
-            extra={"video_id": str(video.pk)},
-        )
+    video.require_signed_urls = _enforce_signed_only(video)
+    video.save(update_fields=["require_signed_urls", "updated_at"])
     return sync_video_metadata(video)
