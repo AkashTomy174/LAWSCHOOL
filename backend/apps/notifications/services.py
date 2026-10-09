@@ -179,6 +179,9 @@ def send_email_now(notification: Notification) -> bool:
 
     if notification.channel != NotificationChannel.EMAIL:
         return False
+    if notification.sent_at is not None:
+        # Already delivered: a Celery retry and the hourly sweep can overlap.
+        return False
 
     subject = notification.title
     message = notification.body

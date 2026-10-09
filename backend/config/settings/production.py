@@ -72,4 +72,7 @@ SPECTACULAR_SETTINGS = {  # noqa: F405
 }
 
 EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+# Password reset and verification need real delivery: apps.core.checks warns
+# (in ``check`` and the pre-deploy ``migrate``) when it is not configured.
+EMAIL_DELIVERY_REQUIRED = True
 LOG_JSON = env_bool("LOG_JSON", True)
