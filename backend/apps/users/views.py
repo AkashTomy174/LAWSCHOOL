@@ -11,6 +11,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -308,3 +309,16 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsAdminRole]
     queryset = User.objects.all()
     lookup_field = "pk"
+
+    def perform_update(self, serializer):
+        user = serializer.instance
+        deactivating = serializer.validated_data.get("is_active") is False
+        if deactivating and user.pk == self.request.user.pk:
+            # Locking yourself out leaves no admin to undo it.
+            raise ValidationError({"is_active": "You cannot deactivate your own account."})
+        was_active = user.is_active
+        updated = serializer.save()
+        if was_active and not updated.is_active:
+            # Access tokens already fail for inactive users; also make sure no
+            # open session can be renewed.
+            services.blacklist_user_refresh_tokens(updated)

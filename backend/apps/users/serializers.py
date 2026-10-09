@@ -241,7 +241,13 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 class AdminUserSerializer(UserSerializer):
-    """Admin-only: allows changing role and activation state."""
+    """Admin-only: allows changing role and activation state.
+
+    ``is_staff``/``is_superuser`` are deliberately absent: ``is_staff`` makes an
+    account a full platform admin (``apps.core.permissions.is_admin``), so it is
+    granted only in the Django admin, by a superuser.
+    """
 
     class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ("is_active",)
         read_only_fields = ("id", "date_joined", "updated_at")
