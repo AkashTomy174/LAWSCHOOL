@@ -32,7 +32,11 @@ _integration_required = [
 _missing_integrations = [key for key in _integration_required if not env(key)]
 if _missing_integrations:
     raise RuntimeError(
-        "Missing payment/video integration secrets: " + ", ".join(_missing_integrations)
+        "Missing payment/video integration secrets: "
+        + ", ".join(_missing_integrations)
+        + ". See docs/production-readiness-remediation.md (environment variables). "
+        "CLOUDFLARE_STREAM_KEY_ID / CLOUDFLARE_STREAM_SIGNING_KEY are the `id` and "
+        "base64 `pem` returned by Cloudflare's POST /accounts/<id>/stream/keys."
     )
 
 # --------------------------------------------------------------------------- #
@@ -63,6 +67,11 @@ REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": NUM_PROXIES}  # noqa: F405
 # Servers / hosts
 # --------------------------------------------------------------------------- #
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", [])
+# Railway's deploy healthcheck calls the container over plain HTTP with this
+# Host header; without both lines below it gets a 400 (host) or a 301 (HTTPS
+# redirect) and every deploy fails its healthcheck.
+ALLOWED_HOSTS.append("healthcheck.railway.app")
+SECURE_REDIRECT_EXEMPT = [r"^health/"]
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", [])
 
 # The OpenAPI schema and Swagger/Redoc UIs map every endpoint; admins only.

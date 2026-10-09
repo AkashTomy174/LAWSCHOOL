@@ -16,10 +16,54 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
+from apps.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def healthcheck(_request):
     """Liveness probe used by Docker/compose and load balancers."""
     return JsonResponse({"status": "ok", "service": "lawschool-api"})
+
+
+def _database_ok() -> None:
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+
+
+def readiness(_request):
+    """Readiness probe: can this instance serve traffic?
+
+    The database is required (503 without it).  The cache is reported but not
+    required: the app degrades without Redis (see apps.core.cache), so a cache
+    outage must not keep every instance out of rotation.  Only "ok"/"error" is
+    returned; details go to the logs, never to the caller.
+    """
+    from apps.core.cache import report_cache_failure
+
+    checks = {}
+    try:
+        _database_ok()
+        checks["database"] = "ok"
+    except Exception:
+        logger.exception("Readiness: database check failed")
+        checks["database"] = "error"
+    try:
+        from django.core.cache import cache
+
+        cache.get("health:ready")
+        checks["cache"] = "ok"
+    except Exception as exc:
+        report_cache_failure("health", exc)
+        checks["cache"] = "error"
+
+    ready = checks["database"] == "ok"
+    return JsonResponse(
+        {"status": "ok" if ready else "unavailable", "checks": checks},
+        status=200 if ready else 503,
+    )
 
 
 api_v1 = [
@@ -41,6 +85,7 @@ api_v1 = [
 
 urlpatterns = [
     path("health/", healthcheck, name="healthcheck"),
+    path("health/ready/", readiness, name="readiness"),
     path("admin/", admin.site.urls),
     path("api/v1/", include((api_v1, "v1"))),
     # OpenAPI schema + interactive docs.
