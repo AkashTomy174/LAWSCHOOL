@@ -19,7 +19,8 @@ instead of a bare 403.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from django.core.cache import cache
 from django.db import transaction
@@ -49,6 +50,9 @@ class AccessDecision:
     allowed: bool
     reason: str
     detail: str = ""
+    # When a subscription grant runs out (None: open-ended or not subscription-based).
+    # Excluded from equality so ``decision == ALLOW_SUBSCRIPTION`` keeps working.
+    expires_at: datetime | None = field(default=None, compare=False)
 
     def __bool__(self) -> bool:  # allows `if decision:`
         return self.allowed
@@ -94,28 +98,41 @@ def get_active_subscription(user):
     enforced by the database rather than by trusting a possibly-stale status
     column.
     """
+    subscriptions = active_subscriptions(user)
+    return subscriptions[0] if subscriptions else None
+
+
+def active_subscriptions(user) -> list:
+    """Every subscription granting access right now, latest-ending first.
+
+    Access is the *union* of these: a user may hold several at once (All Access
+    plus a single-course plan bought later), and none may hide another.
+    """
     if not (user and user.is_authenticated):
-        return None
+        return []
     now = timezone.now()
-    return (
+    return list(
         user.subscriptions.select_related("plan")
         .filter(status=SubscriptionStatus.ACTIVE, start_date__lte=now)
         .filter(Q(end_date__isnull=True) | Q(end_date__gt=now))
         .order_by("-end_date")
-        .first()
     )
 
 
-def _cache_ttl(active) -> int:
-    """Cache lifetime for an answer derived from ``active`` (or no subscription).
+def _earliest_end(subscriptions) -> datetime | None:
+    ends = [s.end_date for s in subscriptions if s.end_date is not None]
+    return min(ends) if ends else None
 
-    Never outlives the subscription: an answer computed while it was active must
-    not be served after ``end_date``.  Natural expiry fires no event to invalidate
-    on, so the TTL itself is the guard.
+
+def _cache_ttl(ends_at: datetime | None) -> int:
+    """Cache lifetime for an answer that stops being true at ``ends_at``.
+
+    Never outlives the subscription it came from: natural expiry fires no event
+    to invalidate on, so the TTL itself is the guard.
     """
-    if active is None or active.end_date is None:
+    if ends_at is None:
         return _ENTITLEMENT_CACHE_TTL
-    remaining = int((active.end_date - timezone.now()).total_seconds())
+    remaining = int((ends_at - timezone.now()).total_seconds())
     return max(1, min(_ENTITLEMENT_CACHE_TTL, remaining))
 
 
@@ -126,9 +143,9 @@ def has_active_subscription(user) -> bool:
     cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)
-    active = get_active_subscription(user)
-    cache.set(cache_key, active is not None, _cache_ttl(active))
-    return active is not None
+    subscriptions = active_subscriptions(user)
+    cache.set(cache_key, bool(subscriptions), _cache_ttl(_earliest_end(subscriptions)))
+    return bool(subscriptions)
 
 
 def invalidate_entitlement_cache(user, *, course=None) -> None:
@@ -276,18 +293,21 @@ def _subscription_decision(user, course) -> AccessDecision:
     )
     cached = cache.get(cache_key)
     if cached is not None:
-        allowed, reason, detail = cached
-        return AccessDecision(allowed, reason, detail)
+        # ``*rest``: entries written before ``expires_at`` existed are 3-tuples.
+        allowed, reason, detail, *rest = cached
+        return AccessDecision(allowed, reason, detail, rest[0] if rest else None)
 
-    active = get_active_subscription(user)
-    if active is not None:
-        if (
-            active.plan.is_all_access
-            or active.plan.courses.filter(pk=course.pk).exists()
-        ):
-            decision = ALLOW_SUBSCRIPTION
-        else:
-            decision = DENY_PLAN_EXCLUDES_COURSE
+    subscriptions = active_subscriptions(user)
+    covering = _covering(subscriptions, course)
+    if covering:
+        # Access lasts until the *last* covering subscription ends.
+        ends = [s.end_date for s in covering]
+        expires_at = None if None in ends else max(ends)
+        decision = AccessDecision(
+            True, ALLOW_SUBSCRIPTION.reason, ALLOW_SUBSCRIPTION.detail, expires_at
+        )
+    elif subscriptions:
+        decision = DENY_PLAN_EXCLUDES_COURSE
     else:
         # Differentiate "never subscribed" from "lapsed" so the UI can show the
         # right call to action (Buy vs Renew).
@@ -299,10 +319,24 @@ def _subscription_decision(user, course) -> AccessDecision:
 
     cache.set(
         cache_key,
-        (decision.allowed, decision.reason, decision.detail),
-        _cache_ttl(active),
+        (decision.allowed, decision.reason, decision.detail, decision.expires_at),
+        _cache_ttl(decision.expires_at),
     )
     return decision
+
+
+def _covering(subscriptions, course) -> list:
+    """The subscriptions whose plan covers ``course`` (one query for all of them)."""
+    if not subscriptions:
+        return []
+    from apps.subscriptions.models import Plan
+
+    listed = set(
+        Plan.courses.through.objects.filter(
+            course_id=course.pk, plan_id__in=[s.plan_id for s in subscriptions]
+        ).values_list("plan_id", flat=True)
+    )
+    return [s for s in subscriptions if s.plan.is_all_access or s.plan_id in listed]
 
 
 def can_user_access_lesson(user, lesson) -> AccessDecision:
@@ -380,7 +414,7 @@ def accessible_course_ids(user) -> set:
     if cached is not None:
         return set(cached)
 
-    active = None
+    subscriptions: list = []
     if user.role == UserRole.ADMIN or user.is_staff:
         ids = set(Course.objects.values_list("id", flat=True))
     else:
@@ -395,25 +429,26 @@ def accessible_course_ids(user) -> set:
             ).values_list("id", flat=True)
         )
 
-        active = get_active_subscription(user)
+        subscriptions = active_subscriptions(user)
         subscription_ids: set = set()
-        if active is not None:
-            if active.plan.is_all_access:
-                subscription_ids = set(
-                    Course.objects.filter(status=CourseStatus.PUBLISHED).values_list(
-                        "id", flat=True
-                    )
+        if any(s.plan.is_all_access for s in subscriptions):
+            subscription_ids = set(
+                Course.objects.filter(status=CourseStatus.PUBLISHED).values_list(
+                    "id", flat=True
                 )
-            else:
-                subscription_ids = set(
-                    Course.objects.filter(
-                        status=CourseStatus.PUBLISHED, plans=active.plan
-                    ).values_list("id", flat=True)
-                )
+            )
+        elif subscriptions:
+            subscription_ids = set(
+                Course.objects.filter(
+                    status=CourseStatus.PUBLISHED,
+                    plans__in=[s.plan_id for s in subscriptions],
+                ).values_list("id", flat=True)
+            )
 
         ids = free_ids | owned_ids | subscription_ids
 
-    cache.set(cache_key, list(ids), _cache_ttl(active))
+    # The set shrinks as soon as *any* contributing subscription ends.
+    cache.set(cache_key, list(ids), _cache_ttl(_earliest_end(subscriptions)))
     return ids
 
 
