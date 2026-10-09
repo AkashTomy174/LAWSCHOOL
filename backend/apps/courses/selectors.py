@@ -101,9 +101,17 @@ def course_detail(slug: str, *, user) -> Course | None:
             ),
             Prefetch(
                 "quizzes",
-                queryset=Quiz.objects.filter(is_published=True).only(
-                    "id", "course_id", "title", "pass_percentage", "max_attempts"
-                ),
+                queryset=Quiz.objects.filter(is_published=True)
+                .only(
+                    "id",
+                    "course_id",
+                    "title",
+                    "description",
+                    "pass_percentage",
+                    "max_attempts",
+                    "time_limit_minutes",
+                )
+                .order_by("created_at"),
                 to_attr="published_quizzes",
             ),
         )

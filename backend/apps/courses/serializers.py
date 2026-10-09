@@ -159,12 +159,14 @@ class CourseDetailSerializer(CourseListSerializer):
 
     sections = serializers.SerializerMethodField()
     quiz_count = serializers.SerializerMethodField()
+    quizzes = serializers.SerializerMethodField()
 
     class Meta(CourseListSerializer.Meta):
         fields = CourseListSerializer.Meta.fields + (
             "description",
             "sections",
             "quiz_count",
+            "quizzes",
             "created_at",
             "updated_at",
         )
@@ -177,6 +179,24 @@ class CourseDetailSerializer(CourseListSerializer):
 
     def get_quiz_count(self, obj: Course) -> int:
         return len(getattr(obj, "published_quizzes", []) or [])
+
+    def get_quizzes(self, obj: Course) -> list:
+        """Published quizzes, so the course page can link to them.
+
+        Metadata only: questions and answers come from the attempt endpoints,
+        which check entitlement.
+        """
+        return [
+            {
+                "id": str(quiz.id),
+                "title": quiz.title,
+                "description": quiz.description,
+                "pass_percentage": quiz.pass_percentage,
+                "max_attempts": quiz.max_attempts,
+                "time_limit_minutes": quiz.time_limit_minutes,
+            }
+            for quiz in getattr(obj, "published_quizzes", []) or []
+        ]
 
 
 class SectionWriteSerializer(serializers.ModelSerializer):

@@ -191,6 +191,25 @@ export default function CourseDetails() {
               </div>
             )}
           </section>
+
+          {course.quizzes?.length > 0 && (
+            <section aria-labelledby="quizzes-heading" className="flex flex-col gap-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <h2 id="quizzes-heading" className="h3">
+                  Quizzes
+                </h2>
+                <span className="small">
+                  {course.quizzes.length} quiz
+                  {course.quizzes.length === 1 ? "" : "zes"}
+                </span>
+              </div>
+              <ul className="m-0 list-none border-y border-line p-0">
+                {course.quizzes.map((quiz) => (
+                  <QuizRow key={quiz.id} quiz={quiz} accessible={accessible} />
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
 
         {/* ----------------------------------------------------------- Sidebar */}
@@ -384,5 +403,48 @@ function LessonRow({ lesson }) {
     </li>
   ) : (
     <li className={rowClass}>{content}</li>
+  );
+}
+
+function QuizRow({ quiz, accessible }) {
+  const meta = [
+    `Pass mark ${quiz.pass_percentage}%`,
+    quiz.max_attempts
+      ? `${quiz.max_attempts} attempt${quiz.max_attempts === 1 ? "" : "s"}`
+      : "Unlimited attempts",
+    quiz.time_limit_minutes ? `${quiz.time_limit_minutes} min` : "Untimed",
+  ].join(" · ");
+
+  const content = (
+    <>
+      <Icon
+        name={accessible ? "flag" : "lock"}
+        className={accessible ? "text-gold-ink" : "text-ink3"}
+      />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className={accessible ? "text-ink" : "text-ink2"}>{quiz.title}</span>
+        <span className="small">{meta}</span>
+      </span>
+      {accessible ? (
+        <span className="btn btn-line">Take quiz</span>
+      ) : (
+        <span className="sr-only">Locked</span>
+      )}
+    </>
+  );
+
+  const rowClass = "flex min-h-[60px] items-center gap-4 px-5 py-3.5";
+
+  return accessible ? (
+    <li className="border-b border-line last:border-b-0">
+      <Link
+        to={`/quiz/${quiz.id}`}
+        className={`${rowClass} transition-colors hover:bg-sunken`}
+      >
+        {content}
+      </Link>
+    </li>
+  ) : (
+    <li className={`${rowClass} border-b border-line last:border-b-0`}>{content}</li>
   );
 }

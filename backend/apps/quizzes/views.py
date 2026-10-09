@@ -429,9 +429,26 @@ class QuizProgressView(APIView):
             user=request.user, quiz=quiz, submitted_at__isnull=False
         )
         best = attempts.order_by("-score", "-percentage").first()
+        # An unsubmitted attempt still inside its time limit: starting again
+        # resumes it, so the UI can say "Resume" instead of "Start".
+        in_progress = (
+            QuizAttempt.objects.filter(
+                user=request.user, quiz=quiz, submitted_at__isnull=True
+            )
+            .select_related("quiz")
+            .order_by("-attempt_number")
+            .first()
+        )
+        if in_progress is not None and services.is_past_time_limit(in_progress):
+            in_progress = None
         return Response(
             {
                 "quiz": {"id": str(quiz.id), "title": quiz.title},
+                "in_progress_attempt": (
+                    {"id": str(in_progress.id), "started_at": in_progress.started_at}
+                    if in_progress
+                    else None
+                ),
                 "attempts_used": attempts.count(),
                 "attempts_allowed": quiz.max_attempts,
                 "attempts_remaining": services.attempts_remaining(request.user, quiz),

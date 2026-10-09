@@ -44,7 +44,7 @@ export default function Quiz() {
   const [remainingSeconds, setRemainingSeconds] = useState(null);
 
   const startedAtRef = useRef(null);
-  const startedRef = useRef(false);
+  const [intro, setIntro] = useState(null); // { quiz, progress } before starting
 
   /* ----------------------------- Start attempt ----------------------------- */
   const begin = useCallback(async () => {
@@ -75,13 +75,27 @@ export default function Quiz() {
     }
   }, [quizId]);
 
+  /* ------------------------------- Intro --------------------------------- */
+  // Opening the page only *reads*: an attempt starts when the student clicks
+  // Start (or Resume), never as a side effect of navigation.
   useEffect(() => {
-    // Guard against StrictMode double-invoking effects in development: starting two
-    // attempts would consume the student's allowance for no reason.
-    if (startedRef.current) return;
-    startedRef.current = true;
-    begin();
-  }, [begin]);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all([quizService.quiz(quizId), quizService.progress(quizId)])
+      .then(([quiz, progress]) => {
+        if (!cancelled) setIntro({ quiz, progress });
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(caught);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [quizId]);
 
   /* ------------------------------ Submission ------------------------------ */
   const submit = useCallback(async () => {
@@ -173,6 +187,10 @@ export default function Quiz() {
         </div>
       </div>
     );
+  }
+
+  if (!payload) {
+    return intro ? <QuizIntro intro={intro} onStart={begin} /> : null;
   }
 
   const questions = payload.quiz.questions || [];
@@ -504,6 +522,94 @@ export default function Quiz() {
             . Answers are graded on the server when you submit.
           </p>
         </aside>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Intro: what the student is about to start                                   */
+/* -------------------------------------------------------------------------- */
+function QuizIntro({ intro, onStart }) {
+  const { quiz, progress } = intro;
+  const now = Date.now();
+  const opensAt = quiz.available_from ? new Date(quiz.available_from) : null;
+  const closesAt = quiz.available_until ? new Date(quiz.available_until) : null;
+  const notOpenYet = opensAt && opensAt.getTime() > now;
+  const closed = closesAt && closesAt.getTime() <= now;
+  const resuming = Boolean(progress.in_progress_attempt);
+  const exhausted = !resuming && progress.attempts_remaining === 0;
+  const best = progress.best_attempt;
+
+  const facts = [
+    ["Questions", quiz.question_count ?? "—"],
+    ["Pass mark", `${quiz.pass_percentage}%`],
+    ["Time limit", quiz.time_limit_minutes ? `${quiz.time_limit_minutes} min` : "Untimed"],
+    [
+      "Attempts",
+      progress.attempts_allowed
+        ? `${progress.attempts_used} of ${progress.attempts_allowed} used`
+        : `${progress.attempts_used} used, unlimited`,
+    ],
+  ];
+
+  let blocked = null;
+  if (notOpenYet) blocked = `Opens ${opensAt.toLocaleString("en-IN")}.`;
+  else if (closed) blocked = "This quiz has closed.";
+  else if (exhausted) blocked = "You have used all your attempts for this quiz.";
+
+  return (
+    <div className="wrap max-w-2xl py-12 sm:py-16">
+      <div className="card flex flex-col gap-6 p-6 sm:p-10">
+        <div className="flex flex-col gap-2">
+          <span className="mono cap">Quiz</span>
+          <h1 className="h2">{quiz.title}</h1>
+          {quiz.description && <p className="body">{quiz.description}</p>}
+        </div>
+
+        <dl className="m-0 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {facts.map(([label, value]) => (
+            <div key={label} className="flex flex-col gap-1">
+              <dt className="small">{label}</dt>
+              <dd className="m-0 font-medium text-ink">{value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {best && (
+          <p className="body">
+            Best so far: {best.score} / {best.max_score} ({Number(best.percentage)}%),{" "}
+            {best.passed ? "passed" : "not passed"}.
+          </p>
+        )}
+
+        <p className="small">
+          {quiz.time_limit_minutes
+            ? "The timer starts when you begin and the quiz submits itself when time runs out. "
+            : ""}
+          Your answers are graded on the server when you submit.
+        </p>
+
+        {blocked && <Callout tone="warning">{blocked}</Callout>}
+
+        <div className="flex flex-wrap gap-3">
+          {!blocked && (
+            <button type="button" className="btn btn-gold btn-lg" onClick={onStart}>
+              {resuming ? "Resume attempt" : "Start quiz"}
+            </button>
+          )}
+          {exhausted && best && (
+            <Link
+              to={`/quiz/${quiz.id}/result?attempt=${best.id}`}
+              className="btn btn-line btn-lg"
+            >
+              View best result
+            </Link>
+          )}
+          <Link to="/dashboard" className="btn btn-line btn-lg">
+            Back to dashboard
+          </Link>
+        </div>
       </div>
     </div>
   );
