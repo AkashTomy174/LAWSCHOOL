@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.db.models import ProtectedError
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
@@ -9,8 +10,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
+from apps.core.exceptions import ConflictError
 from apps.core.network import client_ip
 from apps.core.permissions import (
     IsCourseOwnerOrAdmin,
@@ -19,7 +21,15 @@ from apps.core.permissions import (
     is_schema_generation,
 )
 from apps.quizzes import services
-from apps.quizzes.models import Option, Question, Quiz, QuizAttempt, QuizSectionRule, Subject
+from apps.quizzes.models import (
+    Option,
+    Question,
+    Quiz,
+    QuizAttempt,
+    QuizFixedQuestion,
+    QuizSectionRule,
+    Subject,
+)
 from apps.quizzes.serializers import (
     AttemptQuestionSerializer,
     OptionWriteSerializer,
@@ -27,6 +37,7 @@ from apps.quizzes.serializers import (
     QuizAttemptSerializer,
     QuizAttemptSummarySerializer,
     QuizDetailSerializer,
+    QuizFixedQuestionSerializer,
     QuizListSerializer,
     QuizSectionRuleSerializer,
     QuizWriteSerializer,
@@ -36,19 +47,41 @@ from apps.quizzes.serializers import (
 
 
 class CanManageQuestionBank(BasePermission):
-    """Admins, or instructors the admin has explicitly granted bank access to.
+    """Admins, instructors, or users granted ``manage_question_bank``.
 
     The question bank is shared infrastructure reused across many courses'
-    quizzes, so it is not gated by course ownership like other authoring
-    endpoints -- it uses Django's own permission system instead, granted
-    per-user from the admin site.
+    quizzes.  Anyone allowed in can read and add; changing or deleting an
+    existing question is limited to admins and its creator
+    (see ``_can_change_question``).
     """
 
     def has_permission(self, request, view) -> bool:
         user = request.user
         if not (user and user.is_authenticated):
             return False
-        return is_admin(request) or user.has_perm("quizzes.manage_question_bank")
+        return (
+            is_admin(request)
+            or getattr(user, "role", None) == "instructor"
+            or user.has_perm("quizzes.manage_question_bank")
+        )
+
+
+class ProtectedDeleteMixin:
+    """Turn a PROTECT foreign key into a 409 instead of an unhandled 500."""
+
+    protected_message = "This item is in use and cannot be deleted."
+
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ConflictError(
+                {"detail": self.protected_message}, code="protected_resource"
+            )
+
+
+def _can_change_question(request, question: Question) -> bool:
+    return is_admin(request) or question.created_by_id == request.user.pk
 
 
 # --------------------------------------------------------------------------- #
@@ -134,8 +167,10 @@ class SubjectListCreateView(generics.ListCreateAPIView):
     queryset = Subject.objects.all()
 
 
-class SubjectDetailView(generics.RetrieveUpdateDestroyAPIView):
+class SubjectDetailView(ProtectedDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
     """GET/PATCH/DELETE /api/v1/quizzes/subjects/<uuid>/."""
+
+    protected_message = "This subject is used by a quiz rule and cannot be deleted."
 
     serializer_class = SubjectSerializer
     permission_classes = [CanManageQuestionBank]
@@ -156,18 +191,33 @@ class QuestionListCreateView(generics.ListCreateAPIView):
         queryset = Question.objects.prefetch_related(
             "options", "subjects"
         ).order_by("-created_at")
-        subject_id = self.request.query_params.get("subject")
-        if subject_id:
-            queryset = queryset.filter(subjects=subject_id)
+        params = self.request.query_params
+        if params.get("subject"):
+            queryset = queryset.filter(subjects=params["subject"])
+        if params.get("search"):
+            queryset = queryset.filter(text__icontains=params["search"])
         return queryset
 
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
-class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+
+class QuestionDetailView(ProtectedDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
     """GET/PATCH/DELETE /api/v1/quizzes/questions/<uuid>/."""
+
+    protected_message = (
+        "This question is pinned in a quiz or used in an attempt and cannot be "
+        "deleted. Deactivate it instead."
+    )
 
     serializer_class = QuestionBankSerializer
     permission_classes = [CanManageQuestionBank]
     queryset = Question.objects.prefetch_related("options", "subjects")
+
+    def check_object_permissions(self, request, obj):
+        super().check_object_permissions(request, obj)
+        if request.method not in SAFE_METHODS and not _can_change_question(request, obj):
+            self.permission_denied(request, message="You can only change your own questions.")
 
 
 class QuizSectionRuleListCreateView(generics.ListCreateAPIView):
@@ -216,6 +266,70 @@ class QuizSectionRuleDetailView(generics.RetrieveUpdateDestroyAPIView):
         serializer.save()
 
 
+class QuizFixedQuestionListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/v1/quizzes/fixed-questions/?quiz=<uuid> -- hand-picked questions."""
+
+    serializer_class = QuizFixedQuestionSerializer
+    permission_classes = [IsCourseOwnerOrAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = QuizFixedQuestion.objects.select_related("quiz", "question")
+        quiz_id = self.request.query_params.get("quiz")
+        if quiz_id:
+            queryset = queryset.filter(quiz_id=quiz_id)
+        if not is_admin(self.request):
+            queryset = queryset.filter(quiz__course__instructor=self.request.user)
+        return queryset
+
+    def perform_create(self, serializer):
+        self.check_object_permissions(
+            self.request, serializer.validated_data["quiz"].course
+        )
+        serializer.save()
+
+
+class QuizFixedQuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """GET/PATCH/DELETE /api/v1/quizzes/fixed-questions/<uuid>/."""
+
+    serializer_class = QuizFixedQuestionSerializer
+    permission_classes = [IsCourseOwnerOrAdmin]
+
+    def get_queryset(self):
+        queryset = QuizFixedQuestion.objects.select_related("quiz", "question")
+        if not is_admin(self.request):
+            queryset = queryset.filter(quiz__course__instructor=self.request.user)
+        return queryset
+
+
+class QuizPoolPreviewView(APIView):
+    """GET /api/v1/quizzes/<uuid>/preview-pool/ -- requested vs available per rule."""
+
+    permission_classes = [IsCourseOwnerOrAdmin]
+
+    def get(self, request, pk):
+        quiz = get_object_or_404(Quiz.objects.select_related("course"), pk=pk)
+        self.check_object_permissions(request, quiz.course)
+        rules = [
+            {
+                "subject": rule.subject.name,
+                "requested": rule.question_count,
+                "available": Question.objects.filter(
+                    subjects=rule.subject, is_active=True
+                ).count(),
+            }
+            for rule in quiz.section_rules.select_related("subject")
+        ]
+        return Response(
+            {
+                "rules": rules,
+                "fixed": quiz.fixed_questions.count(),
+                "total_questions": quiz.question_count,
+                "total_marks": quiz.total_marks,
+            }
+        )
+
+
 class OptionListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/v1/quizzes/options/?question=<uuid>.
 
@@ -234,6 +348,14 @@ class OptionListCreateView(generics.ListCreateAPIView):
             queryset = queryset.filter(question_id=question_id)
         return queryset
 
+    def perform_create(self, serializer):
+        question = serializer.validated_data["question"]
+        if not _can_change_question(self.request, question):
+            self.permission_denied(
+                self.request, message="You can only change your own questions."
+            )
+        serializer.save()
+
 
 class OptionDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET/PATCH/DELETE /api/v1/quizzes/options/<uuid>/."""
@@ -241,6 +363,15 @@ class OptionDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = OptionWriteSerializer
     permission_classes = [CanManageQuestionBank]
     queryset = Option.objects.select_related("question")
+
+    def check_object_permissions(self, request, obj):
+        super().check_object_permissions(request, obj)
+        if request.method not in SAFE_METHODS and not _can_change_question(
+            request, obj.question
+        ):
+            self.permission_denied(
+                request, message="You can only change your own questions."
+            )
 
 
 # --------------------------------------------------------------------------- #

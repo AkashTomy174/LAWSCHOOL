@@ -40,6 +40,37 @@ export const courseService = {
   },
 
   /* ---- sections & lessons (authoring) ---- */
+  /** Sections of one course the caller owns (drafts included). */
+  async listSections(slug) {
+    const response = await apiClient.get("/sections/", {
+      params: { course: slug, page_size: 100 },
+    });
+    return response.data.results;
+  },
+
+  /**
+   * Every lesson of one course the caller may author (the server enforces
+   * ownership).  Follows pagination so a course of any size is complete.
+   */
+  async listLessons(courseSlug) {
+    const lessons = [];
+    for (let page = 1; ; page += 1) {
+      const response = await apiClient.get("/lessons/", {
+        params: { course: courseSlug, page, page_size: 100 },
+      });
+      lessons.push(...response.data.results);
+      if (!response.data.next) return lessons;
+    }
+  },
+
+  /** One page of lessons that still need a video (Videos tab picker). */
+  async lessonsWithoutVideo({ search = "", page = 1 } = {}) {
+    const response = await apiClient.get("/lessons/", {
+      params: { without_video: "true", search, page, page_size: 50 },
+    });
+    return response.data;
+  },
+
   async createSection(payload) {
     const response = await apiClient.post("/sections/", payload);
     return response.data;
@@ -66,6 +97,12 @@ export const courseService = {
 
   async deleteLesson(id) {
     await apiClient.delete(`/lessons/${id}/`);
+  },
+
+  /** Teaching overview: own courses for instructors, every course for admins. */
+  async instructorDashboard() {
+    const response = await apiClient.get("/courses/instructor/dashboard/");
+    return response.data;
   },
 
   async watchLesson(id) {

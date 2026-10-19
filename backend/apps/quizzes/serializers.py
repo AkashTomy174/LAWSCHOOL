@@ -16,6 +16,7 @@ from apps.quizzes.models import (
     Quiz,
     QuizAnswer,
     QuizAttempt,
+    QuizFixedQuestion,
     QuizSectionRule,
     Subject,
 )
@@ -62,7 +63,19 @@ class QuestionBankSerializer(serializers.ModelSerializer):
             "subjects",
             "is_active",
             "options",
+            "created_by",
         )
+        read_only_fields = ("created_by",)
+
+    def validate_subjects(self, value):
+        # A pinned question must keep a subject: attempts snapshot it per question.
+        if not value and self.instance is not None and (
+            self.instance.fixed_in_quizzes.exists()
+        ):
+            raise serializers.ValidationError(
+                "This question is pinned in a quiz; it must keep at least one subject."
+            )
+        return value
 
 
 class QuizSectionRuleSerializer(serializers.ModelSerializer):
@@ -80,6 +93,35 @@ class QuizSectionRuleSerializer(serializers.ModelSerializer):
             "ordering",
         )
         read_only_fields = ("id",)
+
+    def validate(self, attrs: dict) -> dict:
+        subject = attrs.get("subject", getattr(self.instance, "subject", None))
+        count = attrs.get("question_count", getattr(self.instance, "question_count", 0))
+        available = Question.objects.filter(subjects=subject, is_active=True).count()
+        if count > available:
+            raise serializers.ValidationError(
+                {"question_count": f"Only {available} active questions in this subject."}
+            )
+        return attrs
+
+
+class QuizFixedQuestionSerializer(serializers.ModelSerializer):
+    text = serializers.CharField(source="question.text", read_only=True)
+
+    class Meta:
+        model = QuizFixedQuestion
+        fields = ("id", "quiz", "question", "text", "marks", "ordering")
+        read_only_fields = ("id",)
+
+    def validate_question(self, question):
+        if not question.subjects.exists():
+            raise serializers.ValidationError("Tag the question with a subject first.")
+        options = list(question.options.all())
+        if len(options) < 2 or sum(o.is_correct for o in options) != 1:
+            raise serializers.ValidationError(
+                "A quiz question needs at least 2 options and exactly 1 correct option."
+            )
+        return question
 
 
 class AttemptQuestionSerializer(serializers.ModelSerializer):
@@ -115,6 +157,7 @@ class QuizListSerializer(serializers.ModelSerializer):
             "pass_percentage",
             "max_attempts",
             "time_limit_minutes",
+            "shuffle_questions",
             "question_count",
             "total_marks",
             "is_published",
@@ -310,6 +353,8 @@ class AttemptReviewSerializer(serializers.Serializer):
     explanation = serializers.CharField(allow_blank=True)
     selected_option_id = serializers.UUIDField(allow_null=True)
     correct_option_id = serializers.UUIDField(allow_null=True)
+    selected_option_text = serializers.CharField(allow_blank=True)
+    correct_option_text = serializers.CharField(allow_blank=True)
     is_correct = serializers.BooleanField()
     marks_awarded = serializers.IntegerField()
     marks_possible = serializers.IntegerField()

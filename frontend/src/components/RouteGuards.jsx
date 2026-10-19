@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { homePathFor } from "../utils/roles";
 import { Panel, Skeleton } from "./ui";
 
 /**
@@ -64,12 +65,12 @@ export function RequireRole({ roles }) {
 
 /** Redirects an already-authenticated visitor away from login/register. */
 export function RedirectIfAuthenticated() {
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const location = useLocation();
 
   if (status === "loading") return <SessionLoading />;
   if (status === "authenticated") {
-    const destination = location.state?.from || "/dashboard";
+    const destination = location.state?.from || homePathFor(user);
     return <Navigate to={destination} replace />;
   }
   return <Outlet />;

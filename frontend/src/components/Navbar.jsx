@@ -4,6 +4,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useUI } from "../context/UIContext";
 import { initials } from "../utils/format";
+import { navLinksFor } from "../utils/roles";
 import Icon from "./Icon";
 
 /**
@@ -15,23 +16,8 @@ import Icon from "./Icon";
  * a student is never left staring at an open overlay on the next page.
  */
 
-const publicLinks = [
-  { to: "/courses", label: "Courses" },
-  { to: "/subscription", label: "Plans" },
-  { to: "/leaderboard", label: "Leaderboard" },
-];
-
-const studentLinks = [
-  { to: "/courses", label: "Courses" },
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/subscription", label: "Plans" },
-  { to: "/leaderboard", label: "Leaderboard" },
-];
-
-const staffLinks = [{ to: "/admin", label: "Admin" }];
-
 export default function Navbar() {
-  const { user, isAuthenticated, logout, isAdmin, isInstructor } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
   const { unreadCount } = useUI();
   const [open, setOpen] = useState(false);
   const location = useLocation();
@@ -46,10 +32,7 @@ export default function Navbar() {
     navigate("/", { replace: true });
   }
 
-  const links = [
-    ...(isAuthenticated ? studentLinks : publicLinks),
-    ...(isAdmin || isInstructor ? staffLinks : []),
-  ];
+  const links = navLinksFor(user);
 
   const linkClass = ({ isActive }) => (isActive ? "on" : undefined);
 

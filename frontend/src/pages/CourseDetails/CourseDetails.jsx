@@ -41,6 +41,23 @@ export default function CourseDetails() {
     );
   }
 
+  // Unknown slugs and draft courses are both 404: retrying cannot help.
+  if (error?.status === 404) {
+    return (
+      <div className="wrap max-w-3xl py-16">
+        <EmptyState
+          title="Course not found"
+          description="This course does not exist or is no longer available."
+          action={
+            <Link to="/courses" className="btn btn-gold">
+              Browse courses
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="wrap max-w-3xl py-16">

@@ -93,7 +93,7 @@ function Hero({ isAuthenticated }) {
           className="relative hidden h-[590px] lg:block"
           aria-hidden="true"
         >
-          <div className="navy-surface lift absolute left-0 top-0 flex h-[318px] w-[min(470px,94%)] flex-col justify-between rounded-[14px] p-[22px]">
+          <div className="navy-surface lift absolute left-0 top-0 flex h-[318px] w-[min(470px,94%)] flex-col justify-between rounded-[14px] p-[22px] pb-[80px]">
             <span className="tag self-start !bg-white/10 !text-[#B4BED6]">
               Criminal Procedure
             </span>

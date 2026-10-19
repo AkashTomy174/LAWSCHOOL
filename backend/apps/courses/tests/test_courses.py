@@ -46,6 +46,8 @@ class TestCourseCatalogue:
         assert response.status_code == 200
         # Paginated envelope: {"count": n, "results": [...]}.
         assert response.data["count"] >= 1
+        # The staff course table shows who teaches each course.
+        assert response.data["results"][0]["instructor_name"] == course.instructor.name
 
     def test_drafts_are_hidden_from_the_catalogue(
         self, api_client, course, draft_course
@@ -276,15 +278,28 @@ class TestCourseAuthoring:
         )
         assert response.status_code == 403
 
-    def test_instructor_cannot_create_a_course(self, auth_client, instructor):
-        """Course ownership is admin-only; instructors can only view."""
+    def test_instructor_creates_own_draft_course(self, auth_client, instructor):
+        """An instructor can add a course; it is theirs and starts as a draft."""
         response = auth_client(instructor).post(
             "/api/v1/courses/",
-            {"title": "New Course", "description": "Self-made.", "status": "draft"},
+            {"title": "New Course", "description": "Self-made.", "status": "published"},
             format="json",
         )
-        assert response.status_code == 403
-        assert not Course.objects.filter(title="New Course").exists()
+        assert response.status_code == 201, response.data
+        created = Course.objects.get(title="New Course")
+        assert created.instructor_id == instructor.pk
+        assert created.status == "draft"
+
+    def test_instructor_cannot_create_a_course_for_someone_else(
+        self, auth_client, instructor, admin_user
+    ):
+        response = auth_client(instructor).post(
+            "/api/v1/courses/",
+            {"title": "Stolen", "description": "x", "instructor": str(admin_user.pk)},
+            format="json",
+        )
+        assert response.status_code == 400
+        assert not Course.objects.filter(title="Stolen").exists()
 
     def test_instructor_cannot_take_over_another_instructors_course(
         self, auth_client, course

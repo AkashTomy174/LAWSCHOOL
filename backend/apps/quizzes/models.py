@@ -118,19 +118,15 @@ class Quiz(models.Model):
 
     @property
     def total_marks(self) -> int:
-        """Configured total: sum of (question_count * marks_per_question) across rules."""
-        total = 0
-        for rule in self.section_rules.all():
-            total += rule.question_count * rule.marks_per_question
-        return total
+        """Configured total across random rules and hand-picked questions."""
+        total = sum(r.question_count * r.marks_per_question for r in self.section_rules.all())
+        return total + sum(f.marks for f in self.fixed_questions.all())
 
     @property
     def question_count(self) -> int:
-        """Configured number of questions a fresh attempt will sample."""
-        total = 0
-        for rule in self.section_rules.all():
-            total += rule.question_count
-        return total
+        """Configured number of questions a fresh attempt will contain."""
+        total = sum(r.question_count for r in self.section_rules.all())
+        return total + len(self.fixed_questions.all())
 
     def is_available_now(self) -> bool:
         if not self.is_published:
@@ -171,10 +167,44 @@ class QuizSectionRule(models.Model):
         return f"{self.quiz.title} -- {self.subject.name} x{self.question_count}"
 
 
+class QuizFixedQuestion(models.Model):
+    """A hand-picked bank question that appears in every attempt of a quiz."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    quiz = models.ForeignKey(
+        Quiz, on_delete=models.CASCADE, related_name="fixed_questions"
+    )
+    question = models.ForeignKey(
+        "Question", on_delete=models.PROTECT, related_name="fixed_in_quizzes"
+    )
+    marks = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    ordering = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ("ordering", "id")
+        verbose_name = _("quiz fixed question")
+        verbose_name_plural = _("quiz fixed questions")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["quiz", "question"], name="unique_fixed_question_per_quiz"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.quiz.title} -- {self.question_id}"
+
+
 class Question(models.Model):
     """A single multiple-choice question living in the shared question bank."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     subjects = models.ManyToManyField(Subject, related_name="questions", blank=True)
     text = models.TextField()
     explanation = models.TextField(

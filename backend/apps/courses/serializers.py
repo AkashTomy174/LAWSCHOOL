@@ -95,6 +95,9 @@ class CourseListSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    instructor_name = serializers.CharField(
+        source="instructor.name", read_only=True, default=""
+    )
     thumbnail_url = serializers.SerializerMethodField()
     is_accessible = serializers.SerializerMethodField()
     access_reason = serializers.SerializerMethodField()
@@ -110,6 +113,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             "summary",
             "thumbnail_url",
             "instructor",
+            "instructor_name",
             "price",
             "status",
             "unlock_rule",
@@ -235,10 +239,13 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     asset so a typo cannot desync the course total.
     """
 
+    course_title = serializers.CharField(source="section.course.title", read_only=True)
+
     class Meta:
         model = Lesson
         fields = (
             "id",
+            "course_title",
             "section",
             "title",
             "description",
@@ -254,6 +261,23 @@ class LessonWriteSerializer(serializers.ModelSerializer):
             "quiz": {"required": False},
         }
 
+    def validate_is_preview(self, value: bool) -> bool:
+        """Free preview is a monetisation decision: administrators only.
+
+        ``is_preview`` lets every signed-in user watch the lesson without a
+        subscription, so an instructor must not be able to open up their own paid
+        lessons.  Publishing/unpublishing (``status``) stays an instructor
+        workflow: the course itself is still published only by an administrator.
+        An unchanged value is accepted so full-object PUTs keep working.
+        """
+        request = self.context.get("request")
+        current = bool(getattr(self.instance, "is_preview", False))
+        if value != current and not (request and _is_admin(request.user)):
+            raise serializers.ValidationError(
+                "Only an administrator can change whether a lesson is a free preview."
+            )
+        return value
+
     def validate(self, attrs: dict) -> dict:
         section = attrs.get("section") or getattr(self.instance, "section", None)
         ordering = attrs.get("ordering", getattr(self.instance, "ordering", None))
@@ -261,6 +285,13 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         if section and quiz and quiz.course_id != section.course_id:
             raise serializers.ValidationError(
                 {"quiz": "The quiz must belong to the same course as the lesson."}
+            )
+        # The DB refuses an empty lesson; say so as a 400 instead of a 500. Videos are
+        # attached by an administrator (``video`` is read-only here), so for this API a
+        # new lesson must carry a quiz.
+        if not quiz and not getattr(self.instance, "video_id", None):
+            raise serializers.ValidationError(
+                {"quiz": "A lesson needs a quiz. Videos are attached by an administrator."}
             )
         if section and ordering:
             clash = Lesson.objects.filter(section=section, ordering=ordering)

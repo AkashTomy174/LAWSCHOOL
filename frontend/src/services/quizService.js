@@ -76,6 +76,59 @@ export const quizService = {
     const response = await apiClient.get("/quiz-attempts/all/", { params });
     return response.data;
   },
+
+  /* ---- question bank, random rules and hand-picked questions ---- */
+  async subjects() {
+    const response = await apiClient.get("/quizzes/subjects/");
+    return response.data;
+  },
+
+  async createSubject(payload) {
+    const response = await apiClient.post("/quizzes/subjects/", payload);
+    return response.data;
+  },
+
+  async questions(params = {}) {
+    const response = await apiClient.get("/quizzes/questions/", { params });
+    return response.data;
+  },
+
+  async rules(quizId) {
+    const response = await apiClient.get("/quizzes/rules/", {
+      params: { quiz: quizId },
+    });
+    return response.data;
+  },
+
+  async addRule(payload) {
+    const response = await apiClient.post("/quizzes/rules/", payload);
+    return response.data;
+  },
+
+  async removeRule(ruleId) {
+    await apiClient.delete(`/quizzes/rules/${ruleId}/`);
+  },
+
+  async fixedQuestions(quizId) {
+    const response = await apiClient.get("/quizzes/fixed-questions/", {
+      params: { quiz: quizId },
+    });
+    return response.data;
+  },
+
+  async addFixedQuestion(payload) {
+    const response = await apiClient.post("/quizzes/fixed-questions/", payload);
+    return response.data;
+  },
+
+  async removeFixedQuestion(id) {
+    await apiClient.delete(`/quizzes/fixed-questions/${id}/`);
+  },
+
+  async poolPreview(quizId) {
+    const response = await apiClient.get(`/quizzes/${quizId}/preview-pool/`);
+    return response.data;
+  },
 };
 
 export const leaderboardService = {

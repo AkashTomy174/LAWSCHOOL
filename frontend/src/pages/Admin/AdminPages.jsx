@@ -1,8 +1,17 @@
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { PageHeader } from "../../components/Layout";
 import { useAuth } from "../../context/AuthContext";
-import { Badge, ErrorState, Panel, Skeleton } from "../../components/ui";
+import {
+  Badge,
+  Button,
+  ErrorState,
+  Panel,
+  Skeleton,
+  TextField,
+} from "../../components/ui";
+import { useUI } from "../../context/UIContext";
 import useAsync from "../../hooks/useAsync";
 import courseService from "../../services/courseService";
 import {
@@ -16,6 +25,11 @@ import {
 } from "../../services/quizService";
 import videoService from "../../services/videoService";
 import { formatMoney } from "../../utils/format";
+import { fieldErrorsFrom } from "../../utils/validation";
+
+/** Breadcrumb root: these tables are shared by admins (/admin/*) and instructors (/instructor/*). */
+const staffRoot = (isAdmin) =>
+  isAdmin ? { label: "Admin", to: "/admin" } : { label: "Teaching", to: "/instructor" };
 
 /**
  * Admin overview.
@@ -72,6 +86,7 @@ export default function AdminDashboard() {
       value: stats.data?.attempts,
       to: "/admin/quizzes",
     },
+    { label: "WhatsApp notifications", value: "Manage", to: "/admin/notifications" },
   ];
 
   return (
@@ -214,17 +229,22 @@ export function AdminUsers() {
 export function AdminCourses() {
   // Course creation and ownership are admin-only; instructors get a read-only view.
   const { isAdmin } = useAuth();
+  // Instructors see only the courses they teach; admins see everything.
   const courses = useAsync(
-    () => courseService.list({ scope: "all", page_size: 50 }),
-    [],
+    () => courseService.list({ scope: isAdmin ? "all" : "mine", page_size: 50 }),
+    [isAdmin],
   );
 
   return (
     <div className="wrap pb-24 pt-12 lg:pt-14">
       <PageHeader
-        title="Courses"
-        description="All courses including drafts. Create and edit through Django admin so validation and audit trails stay server-side."
-        breadcrumbs={[{ label: "Admin", to: "/admin" }, { label: "Courses" }]}
+        title={isAdmin ? "Courses" : "My courses"}
+        description={
+          isAdmin
+            ? "All courses including drafts. Create and edit through Django admin so validation and audit trails stay server-side."
+            : "The courses you teach, drafts included. Use Manage Courses to build out sections and lessons."
+        }
+        breadcrumbs={[staffRoot(isAdmin), { label: isAdmin ? "Courses" : "My courses" }]}
         actions={
           isAdmin ? (
             <a href="/admin/courses/course/add/" className="btn btn-primary">
@@ -272,7 +292,7 @@ export function AdminCourses() {
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-ink3">
-                    {row.instructor?.name || "—"}
+                    {row.instructor_name || "—"}
                   </td>
                   <td className="px-4 py-3">
                     <Badge
@@ -529,8 +549,207 @@ export function AdminPayments() {
 /* -------------------------------------------------------------------------- */
 /* Videos                                                                     */
 /* -------------------------------------------------------------------------- */
+/**
+ * Lesson picker for attaching a video.  Pages through the server's list of
+ * lessons that still lack a video (search + "Load more"), so a large catalogue
+ * is never truncated, and keeps the chosen lesson listed while results change.
+ */
+function LessonPicker({ id, value, onChange, required }) {
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [extra, setExtra] = useState({ rows: [], page: 1, next: null });
+  const [more, setMore] = useState({ busy: false, error: null });
+  const [selected, setSelected] = useState(null);
+  const searchRef = useRef(search);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(query.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const first = useAsync(() => {
+    searchRef.current = search;
+    setExtra({ rows: [], page: 1, next: null });
+    setMore({ busy: false, error: null });
+    return courseService.lessonsWithoutVideo({ search });
+  }, [search]);
+
+  const rows = [...(first.data?.results || []), ...extra.rows];
+  const hasMore = extra.page === 1 ? Boolean(first.data?.next) : Boolean(extra.next);
+  const options =
+    selected && !rows.some((row) => row.id === selected.id) ? [selected, ...rows] : rows;
+
+  async function loadMore() {
+    const forSearch = search;
+    setMore({ busy: true, error: null });
+    try {
+      const data = await courseService.lessonsWithoutVideo({
+        search: forSearch,
+        page: extra.page + 1,
+      });
+      if (searchRef.current !== forSearch) return; // a newer search replaced the list
+      setExtra((current) => ({
+        rows: [...current.rows, ...data.results],
+        page: current.page + 1,
+        next: data.next,
+      }));
+      setMore({ busy: false, error: null });
+    } catch (caught) {
+      setMore({ busy: false, error: caught?.message || "Could not load more lessons." });
+    }
+  }
+
+  function choose(e) {
+    setSelected(options.find((row) => row.id === e.target.value) || null);
+    onChange(e.target.value);
+  }
+
+  return (
+    <div>
+      <label htmlFor={id} className="label">
+        Attach to lesson{required ? "" : " (optional)"}
+      </label>
+      <input
+        type="search"
+        aria-label="Search lessons"
+        className="input mb-2"
+        placeholder="Search by lesson or course"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {first.error ? (
+        <ErrorState error={first.error} onRetry={first.refetch} />
+      ) : (
+        <select
+          id={id}
+          className="input"
+          value={value}
+          onChange={choose}
+          required={required}
+          disabled={first.loading}
+        >
+          <option value="">
+            {first.loading ? "Loading lessons…" : required ? "Choose a lesson" : "— none —"}
+          </option>
+          {options.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.course_title} — {l.title}
+            </option>
+          ))}
+        </select>
+      )}
+      {!first.loading && !first.error && rows.length === 0 && (
+        <p className="cap mt-1">
+          {search ? "No lessons match that search." : "Every lesson already has a video."}
+        </p>
+      )}
+      {hasMore && (
+        <Button type="button" variant="ghost" loading={more.busy} onClick={loadMore} className="mt-2">
+          Load more lessons
+        </Button>
+      )}
+      {more.error && <p className="cap mt-1 text-red-600">{more.error}</p>}
+    </div>
+  );
+}
+
+/** Admin-only: upload a file straight to Cloudflare (or paste an existing UID) and optionally attach it to a lesson. */
+function AddVideoForm({ onAdded, lessonRequired }) {
+  const { pushToast } = useUI();
+  const [pickerKey, setPickerKey] = useState(0);
+  const [form, setForm] = useState({ title: "", uid: "", lesson: "" });
+  const [file, setFile] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+
+  async function submit(e) {
+    e.preventDefault();
+    setErrors({});
+    if (!file && !form.uid.trim()) {
+      setErrors({ uid: "Choose a file or enter a Cloudflare video UID." });
+      return;
+    }
+    setBusy(true);
+    try {
+      let uid = form.uid.trim();
+      if (file) {
+        const target = await videoService.directUploadUrl();
+        const body = new FormData();
+        body.append("file", file);
+        const res = await fetch(target.upload_url, { method: "POST", body });
+        if (!res.ok) throw new Error("Upload to Cloudflare failed.");
+        uid = target.cloudflare_video_id;
+      }
+      await videoService.registerLessonVideo({
+        title: form.title,
+        cloudflareVideoId: uid,
+        lessonId: form.lesson,
+      });
+      pushToast({ message: "Video added", tone: "success" });
+      setForm({ title: "", uid: "", lesson: "" });
+      setFile(null);
+      setPickerKey((key) => key + 1); // that lesson now has a video: reload the picker
+      e.target.reset();
+      onAdded();
+    } catch (err) {
+      const mapped = fieldErrorsFrom(err);
+      if (Object.keys(mapped).length) setErrors(mapped);
+      else pushToast({ message: err.message || "Could not add video", tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel className="mb-6 p-5">
+      <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+        <TextField
+          id="video-title"
+          label="Title"
+          required
+          value={form.title}
+          onChange={set("title")}
+          error={errors.title}
+        />
+        <div>
+          <LessonPicker
+            key={pickerKey}
+            id="video-lesson"
+            value={form.lesson}
+            onChange={(lesson) => setForm({ ...form, lesson })}
+            required={lessonRequired}
+          />
+          {errors.lesson && <p className="cap mt-1 text-red-600">{errors.lesson}</p>}
+        </div>
+        <TextField
+          id="video-file"
+          label="Video file"
+          type="file"
+          accept="video/*"
+          onChange={(e) => setFile(e.target.files[0] || null)}
+        />
+        <TextField
+          id="video-uid"
+          label="…or existing Cloudflare UID"
+          value={form.uid}
+          onChange={set("uid")}
+          disabled={!!file}
+          error={errors.cloudflare_video_id || errors.uid}
+        />
+        <div className="sm:col-span-2">
+          <Button type="submit" loading={busy}>
+            {file ? "Upload & add video" : "Add video"}
+          </Button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
 export function AdminVideos() {
-  // Video editing is admin-only; instructors get a read-only view.
+  // Admins manage every video; instructors only add to / sync their own courses
+  // (the API enforces ownership; the lesson list is already scoped to them).
   const { isAdmin } = useAuth();
   const videos = useAsync(() => videoService.list(), []);
 
@@ -544,7 +763,12 @@ export function AdminVideos() {
       <PageHeader
         title="Videos"
         description="Cloudflare Stream assets. Files are never stored on the application server — only metadata lives in the database."
-        breadcrumbs={[{ label: "Admin", to: "/admin" }, { label: "Videos" }]}
+        breadcrumbs={[staffRoot(isAdmin), { label: "Videos" }]}
+      />
+
+      <AddVideoForm
+        lessonRequired={!isAdmin}
+        onAdded={() => videos.refetch({ silent: true })}
       />
 
       {videos.loading ? (
@@ -558,6 +782,9 @@ export function AdminVideos() {
               <tr>
                 <th scope="col" className="px-4 py-3">
                   Title
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Course / lesson
                 </th>
                 <th scope="col" className="px-4 py-3">
                   Cloudflare id
@@ -577,6 +804,11 @@ export function AdminVideos() {
               {(videos.data || []).map((row) => (
                 <tr key={row.id}>
                   <td className="px-4 py-3 text-ink">{row.title}</td>
+                  <td className="px-4 py-3 text-ink3">
+                    {row.course_title
+                      ? `${row.course_title} — ${row.lesson_title}`
+                      : "Unattached"}
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs text-ink3">
                     {row.cloudflare_video_id}
                   </td>
@@ -597,17 +829,13 @@ export function AdminVideos() {
                     {Math.floor((row.duration_seconds || 0) / 60)}m
                   </td>
                   <td className="px-4 py-3">
-                    {isAdmin ? (
-                      <button
-                        type="button"
-                        onClick={() => sync(row.playback_uid)}
-                        className="text-xs text-gold-ink hover:underline"
-                      >
-                        Re-sync
-                      </button>
-                    ) : (
-                      <span className="text-xs text-ink3">View only</span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => sync(row.playback_uid)}
+                      className="text-xs text-gold-ink hover:underline"
+                    >
+                      Re-sync
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -623,6 +851,8 @@ export function AdminVideos() {
 /* Quizzes                                                                    */
 /* -------------------------------------------------------------------------- */
 export function AdminQuizzes() {
+  const { isAdmin } = useAuth();
+  const quizBase = isAdmin ? "/admin/quizzes" : "/instructor/quizzes";
   const quizzes = useAsync(() => quizService.list(), []);
   const attempts = useAsync(
     () => quizService.allAttempts({ page_size: 20 }),
@@ -634,8 +864,14 @@ export function AdminQuizzes() {
       <PageHeader
         title="Quizzes"
         description="Quiz inventory and the latest graded attempts. Scoring is always computed server-side."
-        breadcrumbs={[{ label: "Admin", to: "/admin" }, { label: "Quizzes" }]}
+        breadcrumbs={[staffRoot(isAdmin), { label: "Quizzes" }]}
       />
+
+      <div className="mb-4">
+        <Link to={`${quizBase}/new`} className="btn btn-primary">
+          New quiz
+        </Link>
+      </div>
 
       {quizzes.loading ? (
         <Skeleton className="h-48 w-full" />
@@ -663,7 +899,11 @@ export function AdminQuizzes() {
             <tbody className="divide-y divide-line">
               {(quizzes.data || []).map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-ink">{row.title}</td>
+                  <td className="px-4 py-3 text-ink">
+                    <Link to={`${quizBase}/${row.id}`} className="hover:underline">
+                      {row.title}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3 text-ink3">
                     {row.question_count}
                   </td>

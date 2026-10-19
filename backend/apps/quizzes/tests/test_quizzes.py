@@ -18,6 +18,7 @@ from apps.quizzes.models import (
     Question,
     Quiz,
     QuizAttempt,
+    QuizFixedQuestion,
     QuizSectionRule,
     Subject,
 )
@@ -507,6 +508,7 @@ class TestResultsAndReview:
         assert "review" in after.data
         assert after.data["review"][0]["correct_option_id"]
         assert after.data["review"][0]["explanation"]
+        assert after.data["review"][0]["correct_option_text"]
 
     def test_student_cannot_read_another_students_attempt(
         self, jwt_client, student, other_student, quiz, active_subscription
@@ -616,7 +618,7 @@ class TestQuizAuthoring:
         )
         assert option.status_code == 201
 
-    def test_instructor_without_bank_permission_cannot_create_question(
+    def test_instructor_can_add_but_not_edit_others_questions(
         self, jwt_client, instructor, subject
     ):
         response = jwt_client(instructor).post(
@@ -624,7 +626,14 @@ class TestQuizAuthoring:
             {"text": "New question?", "marks": 5, "subjects": [str(subject.id)]},
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 201
+        assert response.data["created_by"] == instructor.pk
+
+        other = make_question(subject, text="Someone else's")
+        edit = jwt_client(instructor).patch(
+            f"/api/v1/quizzes/questions/{other.id}/", {"text": "Hijack"}, format="json"
+        )
+        assert edit.status_code == 403
 
     def test_option_ordering_clash_is_rejected(
         self, jwt_client, instructor, quiz, subject
@@ -744,6 +753,74 @@ class TestSampling:
         second_ids = set(second.attempt_questions.values_list("question_id", flat=True))
         assert len(second_ids) == 2
         assert second_ids == {q.id for q in questions}
+
+
+class TestFixedAndRotation:
+    """Hand-picked questions and no-repeat rotation across many attempts."""
+
+    def _quiz(self, course, subject, count):
+        quiz = Quiz.objects.create(course=course, title="Rot", is_published=True)
+        QuizSectionRule.objects.create(
+            quiz=quiz, subject=subject, question_count=count, marks_per_question=1
+        )
+        return quiz
+
+    def test_fixed_questions_are_in_every_attempt_and_not_duplicated(
+        self, db, course, student
+    ):
+        subject = Subject.objects.create(name="Tort", slug="tort")
+        bank = [make_question(subject, text=f"T{i}") for i in range(6)]
+        quiz = self._quiz(course, subject, 3)
+        QuizFixedQuestion.objects.create(quiz=quiz, question=bank[0], marks=2)
+
+        assert quiz.question_count == 4
+        assert quiz.total_marks == 5
+        for n in (1, 2):
+            attempt = make_attempt(quiz, student, attempt_number=n)
+            ids = list(attempt.attempt_questions.values_list("question_id", flat=True))
+            assert len(ids) == 4 and len(set(ids)) == 4
+            assert bank[0].id in ids
+
+    def test_no_repeat_across_attempts_until_bank_exhausted(self, db, course, student):
+        subject = Subject.objects.create(name="Contract", slug="contract")
+        for i in range(12):
+            make_question(subject, text=f"C{i}")
+        quiz = self._quiz(course, subject, 4)
+
+        seen = []
+        for n in (1, 2, 3):
+            attempt = make_attempt(quiz, student, attempt_number=n)
+            seen.append(set(attempt.attempt_questions.values_list("question_id", flat=True)))
+        assert seen[0].isdisjoint(seen[1]) and seen[1].isdisjoint(seen[2])
+        assert seen[0].isdisjoint(seen[2])
+
+        # Bank exhausted: attempt 4 reuses the oldest-seen set (attempt 1's).
+        fourth = make_attempt(quiz, student, attempt_number=4)
+        assert set(fourth.attempt_questions.values_list("question_id", flat=True)) == seen[0]
+
+    def test_rule_larger_than_pool_is_rejected(self, jwt_client, instructor, course):
+        subject = Subject.objects.create(name="Small", slug="small")
+        make_question(subject)
+        quiz = Quiz.objects.create(course=course, title="Q")
+        response = jwt_client(instructor).post(
+            "/api/v1/quizzes/rules/",
+            {"quiz": str(quiz.id), "subject": str(subject.id), "question_count": 5},
+            format="json",
+        )
+        assert response.status_code == 400
+
+    def test_instructor_can_pin_question_via_api(self, jwt_client, instructor, course):
+        subject = Subject.objects.create(name="Pin", slug="pin")
+        question = make_question(subject)
+        quiz = Quiz.objects.create(course=course, title="Q")
+        response = jwt_client(instructor).post(
+            "/api/v1/quizzes/fixed-questions/",
+            {"quiz": str(quiz.id), "question": str(question.id), "marks": 3},
+            format="json",
+        )
+        assert response.status_code == 201, response.data
+        pool = jwt_client(instructor).get(f"/api/v1/quizzes/{quiz.id}/preview-pool/")
+        assert pool.data["fixed"] == 1 and pool.data["total_marks"] == 3
 
 
 class TestAuditRegressions:

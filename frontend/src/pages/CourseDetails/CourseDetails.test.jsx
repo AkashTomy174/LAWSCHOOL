@@ -76,3 +76,41 @@ describe("course quizzes", () => {
     expect(screen.queryByRole("heading", { name: "Quizzes" })).toBeNull();
   });
 });
+
+describe("course load failures", () => {
+  function renderAt() {
+    return render(
+      <AuthContext.Provider value={{ isAuthenticated: false, user: null }}>
+        <MemoryRouter initialEntries={["/courses/no-such-course"]}>
+          <Routes>
+            <Route path="/courses/:slug" element={<CourseDetails />} />
+            <Route path="/courses" element={<div>Catalogue</div>} />
+          </Routes>
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+  }
+
+  it("shows a not-found page with a way back, and never retries a 404", async () => {
+    courseService.detail.mockRejectedValue({ status: 404, code: "not_found", message: "Not found." });
+    renderAt();
+    expect(await screen.findByRole("heading", { name: "Course not found" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(courseService.detail).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("link", { name: "Browse courses" }));
+    expect(screen.getByText("Catalogue")).toBeInTheDocument();
+  });
+
+  it("offers a retry for a transient failure and recovers", async () => {
+    courseService.detail
+      .mockRejectedValueOnce({ status: 0, code: "network_error", message: "Could not reach the server." })
+      .mockResolvedValueOnce({ ...COURSE, is_accessible: true });
+    renderAt();
+    expect(await screen.findByText("Could not reach the server.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("heading", { name: "Criminal Procedure" })).toBeInTheDocument();
+    expect(courseService.detail).toHaveBeenCalledTimes(2);
+  });
+});

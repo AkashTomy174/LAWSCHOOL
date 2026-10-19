@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import CourseCard from "../../components/CourseCard";
 import Icon from "../../components/Icon";
 import { EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { useAuth } from "../../context/AuthContext";
 import useAsync from "../../hooks/useAsync";
 import courseService from "../../services/courseService";
 
@@ -29,6 +30,7 @@ const SORTS = [
 ];
 
 export default function Courses() {
+  const { isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const page = Number(searchParams.get("page") || 1);
@@ -111,6 +113,14 @@ export default function Courses() {
               Browse published courses. Every syllabus is visible; lessons open
               once your plan covers the course.
             </p>
+            {isAdmin && (
+              <a
+                href="/admin/courses/course/add/"
+                className="btn btn-primary self-start"
+              >
+                Add course
+              </a>
+            )}
           </div>
           <div className="flex w-full flex-col gap-2 md:w-[380px]">
             <label

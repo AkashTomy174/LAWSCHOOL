@@ -167,4 +167,26 @@ describe("quiz attempt", () => {
     );
     expect(await screen.findByText("Result screen")).toBeInTheDocument();
   });
+
+  it("keeps the student's answers and lets them retry when a submission is rejected", async () => {
+    quizService.submit
+      .mockRejectedValueOnce(apiError("Please try again shortly.", "service_unavailable"))
+      .mockResolvedValueOnce({ attempt: { id: "a1" } });
+    renderQuiz();
+    await userEvent.click(await screen.findByRole("button", { name: "Start quiz" }));
+    await userEvent.click(await screen.findByRole("radio", { name: /Section 480/ }));
+    await userEvent.click(screen.getAllByRole("button", { name: /review and submit/i })[0]);
+    await userEvent.click(await screen.findByRole("button", { name: "Submit answers" }));
+
+    expect(await screen.findByText(/try again shortly/i)).toBeInTheDocument();
+    // Still on the attempt screen, not bounced to the intro or result.
+    expect(screen.queryByText("Result screen")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+    expect(await screen.findByText("Result screen")).toBeInTheDocument();
+    expect(quizService.submit).toHaveBeenLastCalledWith(
+      "a1",
+      expect.objectContaining({ answers: { qq1: "o1" } }),
+    );
+  });
 });

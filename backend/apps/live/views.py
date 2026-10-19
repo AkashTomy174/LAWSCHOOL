@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +16,10 @@ from apps.courses.models import Course
 from apps.live import services
 from apps.live.models import LiveClass
 from apps.live.serializers import LiveClassPublicSerializer, LiveClassSerializer
+from apps.subscriptions.services import accessible_course_ids
+
+# Ended classes stay listed this long so students can see what they missed.
+RECENT_CLASSES = timedelta(days=7)
 
 
 class LiveClassListCreateView(generics.ListCreateAPIView):
@@ -60,7 +67,11 @@ class LiveClassDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class CourseLiveClassListView(generics.ListAPIView):
-    """GET /api/v1/live-classes/?course=<slug> -- student-facing list, no meeting link."""
+    """GET /api/v1/live-classes/?course=<slug> -- the caller's classes, no meeting link.
+
+    Only classes on courses the caller may access, from the last week onwards (so
+    the list stays bounded); ``status``/``can_join`` come from the server clock.
+    """
 
     serializer_class = LiveClassPublicSerializer
     permission_classes = [IsAuthenticated]
@@ -74,8 +85,11 @@ class CourseLiveClassListView(generics.ListAPIView):
             else None
         )
         queryset = LiveClass.objects.filter(
-            is_published=True, course__status="published"
-        ).select_related("course")
+            is_published=True,
+            course__status="published",
+            course_id__in=accessible_course_ids(self.request.user),
+            scheduled_start__gte=timezone.now() - RECENT_CLASSES,
+        ).select_related("course", "instructor")
         if course:
             queryset = queryset.filter(course=course)
         return queryset.order_by("scheduled_start")
@@ -90,5 +104,8 @@ class LiveClassJoinView(APIView):
         live_class = get_object_or_404(
             LiveClass.objects.select_related("course"), pk=pk, is_published=True
         )
+        # Entitlement first, so a locked student is told why, not when.
         info = services.get_live_class_join_info(request.user, live_class)
+        services.check_join_window(live_class)
+        services.check_meeting_url(live_class)
         return Response(info)

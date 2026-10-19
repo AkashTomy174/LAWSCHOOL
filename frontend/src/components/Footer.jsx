@@ -1,7 +1,12 @@
 import { Link } from "react-router-dom";
 
+import { useAuth } from "../context/AuthContext";
+import { isStaffUser } from "../utils/roles";
+
 /** Navy footer shared by every page that shows site navigation. */
 export default function Footer() {
+  const { user } = useAuth();
+  const staff = isStaffUser(user); // Plans and rankings are learner features
   return (
     <footer className="navy-surface border-t border-white/10">
       <div className="wrap flex flex-col gap-6 py-9 md:flex-row md:items-center md:justify-between">
@@ -16,12 +21,16 @@ export default function Footer() {
           <Link to="/courses" className="py-2 hover:text-white">
             Courses
           </Link>
-          <Link to="/subscription" className="py-2 hover:text-white">
-            Plans
-          </Link>
-          <Link to="/leaderboard" className="py-2 hover:text-white">
-            Leaderboard
-          </Link>
+          {!staff && (
+            <>
+              <Link to="/subscription" className="py-2 hover:text-white">
+                Plans
+              </Link>
+              <Link to="/leaderboard" className="py-2 hover:text-white">
+                Leaderboard
+              </Link>
+            </>
+          )}
           <a
             href="mailto:support@lawschool.local"
             className="py-2 hover:text-white"

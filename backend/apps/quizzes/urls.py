@@ -28,6 +28,21 @@ urlpatterns = [
         views.QuizSectionRuleDetailView.as_view(),
         name="rule-detail",
     ),
+    path(
+        "fixed-questions/",
+        views.QuizFixedQuestionListCreateView.as_view(),
+        name="fixed-question-list",
+    ),
+    path(
+        "fixed-questions/<uuid:pk>/",
+        views.QuizFixedQuestionDetailView.as_view(),
+        name="fixed-question-detail",
+    ),
+    path(
+        "<uuid:pk>/preview-pool/",
+        views.QuizPoolPreviewView.as_view(),
+        name="preview-pool",
+    ),
     path("<uuid:pk>/", views.QuizDetailView.as_view(), name="detail"),
     path("<uuid:pk>/attempts/", views.StartAttemptView.as_view(), name="start-attempt"),
     path("<uuid:pk>/progress/", views.QuizProgressView.as_view(), name="progress"),

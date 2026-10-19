@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import AuthLayout from "../../components/AuthLayout";
 import { Button, Callout, Panel, TextField } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
+import { homePathFor } from "../../utils/roles";
 import { fieldErrorsFrom, validateLogin } from "../../utils/validation";
 
 /**
@@ -46,9 +47,9 @@ export default function Login() {
 
     setSubmitting(true);
     try {
-      await login(form);
-      // Return the student to wherever the guard intercepted them.
-      navigate(location.state?.from || "/dashboard", { replace: true });
+      const signedIn = await login(form);
+      // Return the user to wherever the guard intercepted them, else their home.
+      navigate(location.state?.from || homePathFor(signedIn), { replace: true });
     } catch (caught) {
       const mapped = fieldErrorsFrom(caught);
       if (Object.keys(mapped).length) {
@@ -70,6 +71,12 @@ export default function Login() {
         </p>
 
         <div className="h-7" />
+
+        {location.state?.notice && !generalError && (
+          <div className="mb-5">
+            <Callout tone="info">{location.state.notice}</Callout>
+          </div>
+        )}
 
         {generalError && (
           <div className="mb-5">

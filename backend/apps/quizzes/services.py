@@ -13,11 +13,12 @@ Attempt flow::
 
 from __future__ import annotations
 
+import random
 from datetime import timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models import Max, Sum
 from django.utils import timezone
 
 from apps.core.constants import CourseStatus
@@ -55,17 +56,21 @@ def _locked_course_message(course, decision) -> dict:
     }
 
 
+def _require_course_access(user, quiz: Quiz) -> None:
+    decision = can_user_access_course(user, quiz.course)
+    if not decision:
+        raise EntitlementError(
+            _locked_course_message(quiz.course, decision), code=decision.reason
+        )
+
+
 def can_attempt_quiz(user, quiz: Quiz) -> None:
     """Raise unless the user may attempt ``quiz`` right now.
 
     Combines course entitlement with quiz availability and attempt limits -- the
     three reasons a quiz request is legitimately refused.
     """
-    decision = can_user_access_course(user, quiz.course)
-    if not decision:
-        raise EntitlementError(
-            _locked_course_message(quiz.course, decision), code=decision.reason
-        )
+    _require_course_access(user, quiz)
 
     if not quiz.is_available_now():
         raise DomainError(
@@ -157,52 +162,90 @@ def start_attempt(*, user, quiz: Quiz, ip_address: str | None = None) -> QuizAtt
 
 
 def sample_attempt_questions(attempt: QuizAttempt) -> list[AttemptQuestion]:
-    """Randomly draw this attempt's question set per the quiz's section rules.
+    """Build this attempt's question set: hand-picked questions + random draws.
 
     Called exactly once, when an attempt is first created (never on resume, so
     a page refresh cannot reshuffle a student's questions mid-attempt).
+
+    Random draws avoid every question the student has had in *any* earlier
+    attempt of this quiz; only when a subject's unseen pool runs short do the
+    least-recently-seen questions fill the gap.  Hand-picked questions are
+    always included.
     """
     quiz = attempt.quiz
 
-    previous_question_ids: set = set()
-    previous_attempt = (
-        QuizAttempt.objects.filter(
-            user=attempt.user, quiz=quiz, submitted_at__isnull=False
-        )
-        .exclude(pk=attempt.pk)
-        .order_by("-attempt_number")
-        .first()
-    )
-    if previous_attempt is not None:
-        previous_question_ids = set(
-            previous_attempt.attempt_questions.values_list("question_id", flat=True)
-        )
+    last_seen: dict = {}
+    for qid, number in (
+        AttemptQuestion.objects.filter(attempt__user=attempt.user, attempt__quiz=quiz)
+        .exclude(attempt=attempt)
+        .values("question_id")
+        .annotate(last=Max("attempt__attempt_number"))
+        .values_list("question_id", "last")
+    ):
+        last_seen[qid] = number
 
-    ordering = 1
-    rows: list[AttemptQuestion] = []
-    for rule in quiz.section_rules.select_related("subject").order_by("ordering"):
-        pool = Question.objects.filter(subjects=rule.subject, is_active=True)
-        # ponytail: excluding the previous attempt's questions only when the
-        # remaining pool is still big enough is a naive anti-repeat window (one
-        # attempt back, not N). Widen it with a rolling "last K attempts" lookup
-        # if the same questions start repeating within a few attempts.
-        fresh_pool = pool.exclude(id__in=previous_question_ids)
-        candidates = fresh_pool if fresh_pool.count() >= rule.question_count else pool
-
-        picked = list(candidates.order_by("?")[: rule.question_count])
-        for question in picked:
-            rows.append(
-                AttemptQuestion(
-                    attempt=attempt,
-                    question=question,
-                    subject=rule.subject,
-                    ordering=ordering,
-                    marks=rule.marks_per_question,
-                )
+    picks: list[tuple] = []  # (question_id, subject, marks)
+    chosen: set = set()
+    for fixed in quiz.fixed_questions.select_related("question").prefetch_related(
+        "question__subjects", "question__options"
+    ):
+        question = fixed.question
+        # Pinned questions can go stale after pinning (deactivated, untagged,
+        # options edited).  AttemptQuestion needs a subject and the grader needs
+        # exactly one correct option, so an unusable question is skipped rather
+        # than allowed to fail the whole attempt.
+        subjects = sorted(question.subjects.all(), key=lambda s: s.name)
+        options = list(question.options.all())
+        if (
+            not question.is_active
+            or not subjects
+            or len(options) < 2
+            or sum(o.is_correct for o in options) != 1
+        ):
+            logger.warning(
+                "Skipping unusable pinned question",
+                extra={"quiz_id": str(quiz.pk), "question_id": str(question.pk)},
             )
-            ordering += 1
+            continue
+        picks.append((fixed.question_id, subjects[0], fixed.marks))
+        chosen.add(fixed.question_id)
 
+    for rule in quiz.section_rules.select_related("subject").order_by("ordering"):
+        pool = [
+            q
+            for q in Question.objects.filter(
+                subjects=rule.subject, is_active=True
+            ).values_list("id", flat=True)
+            if q not in chosen
+        ]
+        random.shuffle(pool)
+        # Unseen first (last_seen missing -> 0), then oldest-seen; the shuffle
+        # above keeps ties random because sort is stable.
+        pool.sort(key=lambda q: last_seen.get(q, 0))
+        for qid in pool[: rule.question_count]:
+            picks.append((qid, rule.subject, rule.marks_per_question))
+            chosen.add(qid)
+
+    if not picks:
+        # Raised inside start_attempt's savepoint, so the attempt row rolls back
+        # with it: no empty attempt is ever left behind.
+        raise DomainError(
+            {"detail": "This quiz has no usable questions right now."},
+            code="quiz_empty",
+        )
+    if quiz.shuffle_questions:
+        random.shuffle(picks)
+    rows = [
+        AttemptQuestion(
+            attempt=attempt, question_id=qid, subject=subject, ordering=i, marks=marks
+        )
+        for i, (qid, subject, marks) in enumerate(picks, start=1)
+    ]
     AttemptQuestion.objects.bulk_create(rows)
+    # The configured total can exceed what was actually served (skipped or short
+    # pools); the attempt's ceiling must match the questions it contains.
+    attempt.max_score = sum(marks for _, _, marks in picks)
+    attempt.save(update_fields=["max_score"])
     return rows
 
 
@@ -287,8 +330,13 @@ def submit_attempt(
         return attempt
 
     quiz = attempt.quiz
-    # Re-check entitlement at submission time: a subscription can lapse mid-quiz.
-    can_attempt_quiz(attempt.user, quiz)
+    # Re-check *entitlement* at submission time: a subscription can lapse mid-quiz.
+    # Availability, publication, rules and attempt limits are start-time gates only:
+    # the attempt already exists, its questions and marks are frozen on
+    # AttemptQuestion, and the time limit below is the deadline that matters.
+    # Re-applying the start gates here would discard a student's finished work
+    # whenever a quiz is unpublished or edited mid-attempt.
+    _require_course_access(attempt.user, quiz)
 
     if len(answers) > attempt.attempt_questions.count():
         raise DomainError(
@@ -375,8 +423,9 @@ def _notify_quiz_result(attempt: QuizAttempt) -> None:
                 "score": attempt.score,
                 "max_score": attempt.max_score,
                 "percentage": str(attempt.percentage),
-                "passed": "passed" if attempt.passed else "not passed",
+                "passed": "passed" if attempt.passed else "did not pass",
             },
+            whatsapp_key=f"quiz_result:{attempt.pk}",
         )
     except Exception:  # pragma: no cover - notifications are never fatal
         logger.exception(
@@ -414,6 +463,12 @@ def attempt_review(attempt: QuizAttempt) -> list[dict]:
                     else None
                 ),
                 "correct_option_id": str(correct.id) if correct else None,
+                "selected_option_text": (
+                    answer.selected_option.text
+                    if answer and answer.selected_option_id
+                    else ""
+                ),
+                "correct_option_text": correct.text if correct else "",
                 "is_correct": bool(answer and answer.is_correct),
                 "marks_awarded": answer.marks_awarded if answer else 0,
                 "marks_possible": attempt_question.marks,

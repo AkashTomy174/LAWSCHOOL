@@ -2,9 +2,11 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import Icon from "../../components/Icon";
 import { EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { useAuth } from "../../context/AuthContext";
 import useAsync from "../../hooks/useAsync";
 import { quizService } from "../../services/quizService";
 import { formatDuration } from "../../utils/format";
+import { isStaffUser } from "../../utils/roles";
 
 /**
  * Quiz result + review.
@@ -14,6 +16,7 @@ import { formatDuration } from "../../utils/format";
  * rendered from `GET /quiz-attempts/<id>/` rather than being derived locally.
  */
 export default function QuizResult() {
+  const { user } = useAuth();
   const { quizId } = useParams();
   const [searchParams] = useSearchParams();
   const attemptId = searchParams.get("attempt");
@@ -134,9 +137,11 @@ export default function QuizResult() {
           <Link to="/dashboard" className="btn btn-on-navy">
             Back to dashboard
           </Link>
-          <Link to="/leaderboard" className="btn btn-on-navy">
-            See leaderboard
-          </Link>
+          {!isStaffUser(user) && (
+            <Link to="/leaderboard" className="btn btn-on-navy">
+              See leaderboard
+            </Link>
+          )}
         </div>
       </section>
 
@@ -173,6 +178,20 @@ export default function QuizResult() {
                   {row.marks_awarded} of {row.marks_possible} mark
                   {row.marks_possible === 1 ? "" : "s"} awarded
                 </p>
+
+                <dl className="small pl-[34px]">
+                  <dt className="cap inline">Your answer: </dt>
+                  <dd className="inline">
+                    {row.selected_option_text || "Not answered"}
+                  </dd>
+                  {!row.is_correct && row.correct_option_text && (
+                    <>
+                      <br />
+                      <dt className="cap inline">Correct answer: </dt>
+                      <dd className="inline">{row.correct_option_text}</dd>
+                    </>
+                  )}
+                </dl>
 
                 {row.explanation && (
                   <div className="ml-[34px] rounded-[10px] border border-line bg-sunken px-5 py-4">

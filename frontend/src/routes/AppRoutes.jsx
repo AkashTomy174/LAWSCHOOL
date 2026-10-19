@@ -1,3 +1,4 @@
+import { adminTabs } from "../utils/roles";
 import { Suspense, lazy } from "react";
 import { Route, Routes } from "react-router-dom";
 
@@ -19,8 +20,11 @@ import { Skeleton } from "../components/ui";
  * Guard placement encodes the intended audience:
  *
  * * public          — Home, Courses, CourseDetails
- * * auth-only       — Dashboard, Watch, Quiz, Leaderboard, Subscription, Profile
- * * staff-only      — the whole /admin branch (instructor + admin)
+ * * auth-only       — Dashboard, Watch, Quiz, Subscription, Profile
+ * * learner-only    — Leaderboard (rankings are not shown to staff), Live classes
+ *                   (staff schedule theirs under /instructor/live)
+ * * instructor-only — the /instructor workspace (Teaching)
+ * * admin-only      — the whole /admin branch
  *
  * These guards are UX only. The API enforces the same rules independently, so a
  * student who bypasses the router still receives 401/403 responses.
@@ -38,9 +42,16 @@ const Dashboard = lazy(() => import("../pages/Dashboard/Dashboard"));
 const Quiz = lazy(() => import("../pages/Quiz/Quiz"));
 const QuizResult = lazy(() => import("../pages/Quiz/QuizResult"));
 const Leaderboard = lazy(() => import("../pages/Leaderboard/Leaderboard"));
+const MyLiveClasses = lazy(() => import("../pages/Live/MyLiveClasses"));
 const Subscription = lazy(() => import("../pages/Subscription/Subscription"));
 const Profile = lazy(() => import("../pages/Profile/Profile"));
 const Progress = lazy(() => import("../pages/Profile/Progress"));
+const WhatsAppSettings = lazy(
+  () => import("../pages/Profile/WhatsAppSettings"),
+);
+const AdminNotifications = lazy(
+  () => import("../pages/Admin/AdminNotifications"),
+);
 const Notifications = lazy(() =>
   import("../pages/Profile/Progress").then((m) => ({
     default: m.Notifications,
@@ -59,6 +70,14 @@ const NotFound = lazy(() =>
   import("../pages/Auth/ForgotPassword").then((m) => ({ default: m.NotFound })),
 );
 
+const InstructorLayout = lazy(
+  () => import("../pages/Instructor/InstructorLayout"),
+);
+const InstructorDashboard = lazy(
+  () => import("../pages/Instructor/InstructorDashboard"),
+);
+const ManageCourses = lazy(() => import("../pages/Instructor/ManageCourses"));
+const LiveClasses = lazy(() => import("../pages/Instructor/LiveClasses"));
 const AdminDashboard = lazy(() => import("../pages/Admin/AdminPages"));
 const AdminUsers = lazy(() =>
   import("../pages/Admin/AdminPages").then((m) => ({ default: m.AdminUsers })),
@@ -86,6 +105,7 @@ const AdminQuizzes = lazy(() =>
     default: m.AdminQuizzes,
   })),
 );
+const QuizBuilder = lazy(() => import("../pages/Quiz/QuizBuilder"));
 const AdminLeaderboard = lazy(() =>
   import("../pages/Admin/AdminPages").then((m) => ({
     default: m.AdminLeaderboard,
@@ -102,8 +122,6 @@ function RouteFallback() {
     </div>
   );
 }
-
-const STAFF_ROLES = ["instructor", "admin"];
 
 export default function AppRoutes() {
   return (
@@ -132,31 +150,55 @@ export default function AppRoutes() {
             <Route path="watch/:lessonId" element={<VideoPlayerPage />} />
             <Route path="quiz/:quizId" element={<Quiz />} />
             <Route path="quiz/:quizId/result" element={<QuizResult />} />
-            <Route path="leaderboard" element={<Leaderboard />} />
             <Route path="subscription" element={<Subscription />} />
             <Route path="profile" element={<Profile />} />
             <Route path="progress" element={<Progress />} />
             <Route path="notifications" element={<Notifications />} />
+            <Route path="settings/whatsapp" element={<WhatsAppSettings />} />
           </Route>
 
-          {/* -------------------------------------------------- Staff only */}
-          <Route element={<RequireRole roles={STAFF_ROLES} />}>
-            <Route path="admin" element={<AdminDashboard />} />
-            <Route path="admin/courses" element={<AdminCourses />} />
-            <Route path="admin/courses/:id" element={<AdminCourses />} />
-            <Route
-              path="admin/subscriptions"
-              element={<AdminSubscriptions />}
-            />
-            <Route path="admin/payments" element={<AdminPayments />} />
-            <Route path="admin/videos" element={<AdminVideos />} />
-            <Route path="admin/quizzes" element={<AdminQuizzes />} />
-            <Route path="admin/leaderboard" element={<AdminLeaderboard />} />
+          {/* ------------------------------------------- Learners (rankings) */}
+          <Route element={<RequireRole roles={["student"]} />}>
+            <Route path="leaderboard" element={<Leaderboard />} />
+            <Route path="live" element={<MyLiveClasses />} />
+          </Route>
+
+          {/* ----------------------------------------- Instructors (Teaching) */}
+          <Route element={<RequireRole roles={["instructor"]} />}>
+            <Route path="instructor" element={<InstructorLayout />}>
+              <Route index element={<InstructorDashboard />} />
+              <Route path="courses" element={<AdminCourses />} />
+              <Route path="manage" element={<ManageCourses />} />
+              <Route path="videos" element={<AdminVideos />} />
+              <Route path="quizzes" element={<AdminQuizzes />} />
+              <Route path="quizzes/:id" element={<QuizBuilder />} />
+              <Route path="live" element={<LiveClasses />} />
+            </Route>
           </Route>
 
           {/* -------------------------------------------------- Admin only */}
           <Route element={<RequireRole roles={["admin"]} />}>
-            <Route path="admin/users" element={<AdminUsers />} />
+            <Route
+              element={<InstructorLayout tabs={adminTabs} label="Admin" />}
+            >
+              <Route path="admin" element={<AdminDashboard />} />
+              <Route path="admin/users" element={<AdminUsers />} />
+              <Route path="admin/courses" element={<AdminCourses />} />
+              <Route path="admin/courses/:id" element={<AdminCourses />} />
+              <Route
+                path="admin/subscriptions"
+                element={<AdminSubscriptions />}
+              />
+              <Route path="admin/payments" element={<AdminPayments />} />
+              <Route path="admin/videos" element={<AdminVideos />} />
+              <Route path="admin/quizzes" element={<AdminQuizzes />} />
+              <Route path="admin/quizzes/:id" element={<QuizBuilder />} />
+              <Route path="admin/leaderboard" element={<AdminLeaderboard />} />
+              <Route
+                path="admin/notifications"
+                element={<AdminNotifications />}
+              />
+            </Route>
           </Route>
 
           {/* --------------------------------------------------------- 404 */}

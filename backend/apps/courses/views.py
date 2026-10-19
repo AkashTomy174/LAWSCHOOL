@@ -6,7 +6,7 @@ classes and the entitlement service, then serialize.  No business rules live her
 
 from __future__ import annotations
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
@@ -17,9 +17,14 @@ from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnl
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.permissions import IsAdminRole, IsCourseOwnerOrAdmin, is_admin
+from apps.core.permissions import (
+    IsAdminRole,
+    IsCourseOwnerOrAdmin,
+    IsInstructorOrAdmin,
+    is_admin,
+)
 from apps.courses import selectors
-from apps.courses.models import Course, Lesson, Section
+from apps.courses.models import Course, CourseStatus, Lesson, Section
 from apps.courses.serializers import (
     CourseDetailSerializer,
     CourseListSerializer,
@@ -114,10 +119,10 @@ def _course_detail_context(request, course) -> dict:
 # Courses
 # --------------------------------------------------------------------------- #
 class CourseListView(generics.ListCreateAPIView):
-    """GET /api/v1/courses/ (public catalogue) · POST (admins only).
+    """GET /api/v1/courses/ (public catalogue) · POST (instructors and admins).
 
-    Course ownership is an admin decision: instructors can view courses but never
-    create them or assign themselves as instructor of record.
+    An instructor can only create courses under their own name (the serializer
+    enforces it) and they start as drafts; only an admin publishes.
     """
 
     permission_classes = [IsAuthenticatedOrReadOnly]
@@ -136,13 +141,29 @@ class CourseListView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsAdminRole()]
+            return [IsInstructorOrAdmin()]
         return super().get_permissions()
+
+    def perform_create(self, serializer):
+        if is_admin(self.request):
+            serializer.save()
+        else:
+            serializer.save(instructor=self.request.user, status=CourseStatus.DRAFT)
 
     def get_queryset(self):
         search = self.request.query_params.get("search")
+        scope = self.request.query_params.get("scope")
+        # ?scope=mine: only courses the caller teaches (drafts included).
+        if scope == "mine":
+            if not self.request.user.is_authenticated:
+                return Course.objects.none()
+            return selectors.all_courses_for_staff(
+                self.request.user,
+                status=self.request.query_params.get("status"),
+                search=search,
+            ).filter(instructor=self.request.user)
         # ?scope=all adds whatever drafts the caller may see (none for students).
-        if self.request.query_params.get("scope") == "all":
+        if scope == "all":
             return selectors.all_courses_for_staff(
                 self.request.user,
                 status=self.request.query_params.get("status"),
@@ -323,7 +344,12 @@ class SectionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class LessonListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/v1/lessons/?section=<uuid>."""
+    """GET/POST /api/v1/lessons/
+
+    Filters: ``section=<uuid>``, ``course=<slug>``, ``without_video=true`` and
+    ``search=<text>`` (lesson or course title).  The order is total so page
+    boundaries never skip or repeat a lesson.
+    """
 
     serializer_class = LessonWriteSerializer
     permission_classes = [IsCourseOwnerOrAdmin]
@@ -331,10 +357,20 @@ class LessonListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         queryset = Lesson.objects.select_related(
             "section", "section__course", "video", "quiz"
-        ).order_by("ordering")
+        ).order_by("section__course__title", "section__ordering", "ordering", "id")
         section_id = self.request.query_params.get("section")
         if section_id:
             queryset = queryset.filter(section_id=section_id)
+        course_slug = self.request.query_params.get("course")
+        if course_slug:
+            queryset = queryset.filter(section__course__slug=course_slug)
+        if self.request.query_params.get("without_video") == "true":
+            queryset = queryset.filter(video__isnull=True)
+        search = self.request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) | Q(section__course__title__icontains=search)
+            )
         if not is_admin(self.request):
             queryset = queryset.filter(section__course__instructor=self.request.user)
         return queryset
@@ -438,3 +474,153 @@ class LessonWatchView(APIView):
                 "duration_seconds": video.duration_seconds,
             }
         return Response(payload)
+
+
+class InstructorDashboardView(APIView):
+    """GET /api/v1/courses/instructor/dashboard/ -- teaching overview.
+
+    Instructors see their own courses; admins see every course.  "Students" are
+    learners with recorded activity (video progress or a quiz attempt) in the
+    course: there is no enrolment table, access comes from subscriptions.
+    """
+
+    permission_classes = [IsCourseOwnerOrAdmin]
+
+    @extend_schema(responses={200: dict})
+    def get(self, request):
+        from django.db.models import Avg, Count, Q
+        from django.utils import timezone
+
+        from apps.live.models import LiveClass
+        from apps.quizzes.models import QuizAttempt
+        from apps.videos.models import VideoProgress
+
+        courses = Course.objects.order_by("title")
+        if not is_admin(request):
+            courses = courses.filter(instructor=request.user)
+        courses = list(courses)
+        course_ids = [c.pk for c in courses]
+        owners = {c.pk: c.instructor_id for c in courses}
+
+        progress = VideoProgress.objects.filter(lesson__section__course_id__in=course_ids)
+        attempts = QuizAttempt.objects.filter(
+            quiz__course_id__in=course_ids, submitted_at__isnull=False
+        )
+
+        students: dict = {cid: set() for cid in course_ids}
+        for cid, uid in progress.values_list("lesson__section__course_id", "user_id").distinct():
+            students[cid].add(uid)
+        for cid, uid in attempts.values_list("quiz__course_id", "user_id").distinct():
+            students[cid].add(uid)
+        for cid in course_ids:  # the teacher's own activity is not a student's
+            students[cid].discard(owners[cid])
+
+        completed = dict(
+            progress.filter(completed=True)
+            .values_list("lesson__section__course_id")
+            .annotate(n=Count("pk"))
+        )
+        quiz_stats = {
+            row["quiz__course_id"]: row
+            for row in attempts.values("quiz__course_id").annotate(
+                n=Count("pk"),
+                avg=Avg("percentage"),
+                passed=Count("pk", filter=Q(passed=True)),
+            )
+        }
+        lesson_stats = {
+            row["lesson_id"]: row
+            for row in progress.values("lesson_id").annotate(
+                watchers=Count("user", distinct=True),
+                done=Count("pk", filter=Q(completed=True)),
+            )
+        }
+        lessons_by_course: dict = {cid: [] for cid in course_ids}
+        for lesson in Lesson.objects.filter(section__course_id__in=course_ids).select_related(
+            "section"
+        ).order_by("section__ordering", "ordering"):
+            stat = lesson_stats.get(lesson.pk, {})
+            lessons_by_course[lesson.section.course_id].append(
+                {
+                    "id": str(lesson.pk),
+                    "title": lesson.title,
+                    "status": lesson.status,
+                    "watchers": stat.get("watchers", 0),
+                    "completed": stat.get("done", 0),
+                }
+            )
+
+        course_rows = []
+        for c in courses:
+            lessons = lessons_by_course[c.pk]
+            n_students = len(students[c.pk])
+            slots = n_students * len(lessons)
+            q = quiz_stats.get(c.pk)
+            course_rows.append(
+                {
+                    "id": str(c.pk),
+                    "slug": c.slug,
+                    "title": c.title,
+                    "status": c.status,
+                    "lesson_count": len(lessons),
+                    "student_count": n_students,
+                    # completed lesson-views over (students x lessons)
+                    "completion_percent": round(100 * completed.get(c.pk, 0) / slots) if slots else 0,
+                    "quiz_attempts": q["n"] if q else 0,
+                    "avg_quiz_percent": round(float(q["avg"]), 1) if q else None,
+                    "pass_rate_percent": round(100 * q["passed"] / q["n"]) if q else None,
+                    "lessons": lessons,
+                }
+            )
+
+        all_students = set().union(*students.values()) if students else set()
+        total_attempts = sum(r["quiz_attempts"] for r in course_rows)
+        total_passed = sum(row["passed"] for row in quiz_stats.values())
+        overall_avg = attempts.aggregate(a=Avg("percentage"))["a"]
+
+        upcoming = (
+            LiveClass.objects.filter(course_id__in=course_ids, scheduled_start__gte=timezone.now())
+            .select_related("course")
+            .order_by("scheduled_start")[:6]
+        )
+        recent = (
+            attempts.select_related("user", "quiz", "quiz__course").order_by("-submitted_at")[:8]
+        )
+
+        return Response(
+            {
+                "totals": {
+                    "courses": len(courses),
+                    "published_courses": sum(c.status == "published" for c in courses),
+                    "students": len(all_students),
+                    "quiz_attempts": total_attempts,
+                    "avg_quiz_percent": round(float(overall_avg), 1) if overall_avg is not None else None,
+                    "pass_rate_percent": round(100 * total_passed / total_attempts) if total_attempts else None,
+                },
+                "courses": course_rows,
+                "upcoming_live_classes": [
+                    {
+                        "id": str(lc.pk),
+                        "title": lc.title,
+                        "course_title": lc.course.title,
+                        "scheduled_start": lc.scheduled_start,
+                        "duration_minutes": lc.duration_minutes,
+                        "provider": lc.meeting_provider,
+                        "is_published": lc.is_published,
+                    }
+                    for lc in upcoming
+                ],
+                "recent_attempts": [
+                    {
+                        "id": str(a.pk),
+                        "student": a.user.name,
+                        "quiz": a.quiz.title,
+                        "course_title": a.quiz.course.title,
+                        "percentage": float(a.percentage),
+                        "passed": a.passed,
+                        "submitted_at": a.submitted_at,
+                    }
+                    for a in recent
+                ],
+            }
+        )

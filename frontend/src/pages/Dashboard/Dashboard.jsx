@@ -6,9 +6,12 @@ import { useAuth } from "../../context/AuthContext";
 import useAsync from "../../hooks/useAsync";
 import courseService from "../../services/courseService";
 import { subscriptionService } from "../../services/paymentService";
+import liveService from "../../services/liveService";
 import { leaderboardService, quizService } from "../../services/quizService";
 import videoService from "../../services/videoService";
+import { homePathFor, isStaffUser } from "../../utils/roles";
 import {
+  formatDateTime,
   formatDaysRemaining,
   formatDuration,
   formatRelative,
@@ -33,6 +36,8 @@ function greeting(date = new Date()) {
 
 export default function Dashboard() {
   const { user } = useAuth();
+  // Staff reach courses through ownership/role, not a plan: no upsell for them.
+  const staff = isStaffUser(user);
 
   const subscription = useAsync(() => subscriptionService.mine(), []);
   const courses = useAsync(() => courseService.list({ page_size: 20 }), []);
@@ -41,7 +46,15 @@ export default function Dashboard() {
     [],
   );
   const attempts = useAsync(() => quizService.myAttempts({ page_size: 5 }), []);
-  const rank = useAsync(() => leaderboardService.me(), []);
+  // Rankings are a learner feature: staff neither fetch nor see them.
+  const rank = useAsync(
+    () => (staff ? Promise.resolve(null) : leaderboardService.me()),
+    [staff],
+  );
+  const live = useAsync(
+    () => (staff ? Promise.resolve([]) : liveService.mine()),
+    [staff],
+  );
 
   const active = subscription.data?.active;
   const allCourses = courses.data?.results || [];
@@ -49,6 +62,9 @@ export default function Dashboard() {
   const locked = allCourses.filter((course) => !course.is_accessible);
   const recentProgress = progress.data?.results || [];
   const recentAttempts = attempts.data?.results || [];
+  const upcomingLive = (live.data || [])
+    .filter((row) => row.status !== "ended")
+    .slice(0, 3);
   const resumeRow =
     recentProgress.find((row) => !row.completed) || recentProgress[0] || null;
 
@@ -76,7 +92,11 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {subscription.loading ? (
+        {staff ? (
+          <Link to={homePathFor(user)} className="btn btn-gold">
+            {user?.role === "admin" ? "Back to admin" : "Back to teaching"}
+          </Link>
+        ) : subscription.loading ? (
           <Skeleton className="h-11 w-56" />
         ) : active ? (
           <div className="flex items-center gap-3 rounded-lg bg-gold-tint px-4 py-2.5 text-gold-ink">
@@ -95,7 +115,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {!subscription.loading && !active && (
+      {!staff && !subscription.loading && !active && (
         <p className="mb-10 rounded-[10px] bg-gold-tint px-4 py-3 text-[15px] text-[#4A3A00]">
           {subscription.data?.history?.length
             ? "Your previous plan has ended, so subscription courses are locked. "
@@ -224,15 +244,17 @@ export default function Dashboard() {
         >
           <section className="flex flex-col gap-4">
             <h2 className="h4">Your results</h2>
-            <dl className="m-0 grid grid-cols-3 gap-4">
+            <dl className={`m-0 grid gap-4 ${staff ? "grid-cols-2" : "grid-cols-3"}`}>
               <Figure
                 label="quizzes"
                 value={attempts.loading ? null : (attempts.data?.count ?? 0)}
               />
-              <Figure
-                label="lessons done"
-                value={rank.loading ? null : (rank.data?.lessons_completed ?? 0)}
-              />
+              {!staff && (
+                <Figure
+                  label="lessons done"
+                  value={rank.loading ? null : (rank.data?.lessons_completed ?? 0)}
+                />
+              )}
               <Figure
                 label="avg score"
                 value={
@@ -246,8 +268,9 @@ export default function Dashboard() {
             </dl>
           </section>
 
-          <hr className="rule" />
+          {!staff && <hr className="rule" />}
 
+          {!staff && (
           <section className="flex flex-col gap-3" aria-label="Leaderboard">
             <div className="flex items-center justify-between">
               <h2 className="h4">Leaderboard</h2>
@@ -278,6 +301,43 @@ export default function Dashboard() {
               </div>
             )}
           </section>
+          )}
+
+          {!staff && <hr className="rule" />}
+
+          {!staff && (
+            <section className="flex flex-col gap-3" aria-label="Live classes">
+              <div className="flex items-center justify-between">
+                <h2 className="h4">Live classes</h2>
+                <Link to="/live" className="small font-medium !text-gold-ink hover:underline">
+                  View all
+                </Link>
+              </div>
+              {live.loading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : live.error ? (
+                <p className="small">Live classes are unavailable right now.</p>
+              ) : upcomingLive.length === 0 ? (
+                <p className="small">No upcoming live classes.</p>
+              ) : (
+                <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                  {upcomingLive.map((row) => (
+                    <li key={row.id} className="flex flex-col">
+                      <span className="font-medium">
+                        {row.title}
+                        {row.status === "live" && (
+                          <span className="tag tag-ok ml-2">Live now</span>
+                        )}
+                      </span>
+                      <span className="cap">
+                        {row.course_title} · {formatDateTime(row.scheduled_start)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
 
           {locked.length > 0 && (
             <>
@@ -340,7 +400,8 @@ function ContinueCard({ loading, row, fallbackCourse }) {
         {row ? (
           <>
             <h2 className="h3">
-              {row.completed ? "Review your last lesson" : "Pick up your last lesson"}
+              {row.lesson_title ||
+                (row.completed ? "Review your last lesson" : "Pick up your last lesson")}
             </h2>
             <div className="flex flex-col gap-2">
               <div

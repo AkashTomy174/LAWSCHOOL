@@ -499,7 +499,7 @@ class TestPermissionsByRole:
         )
         assert response.status_code == 403
 
-    def test_instructor_cannot_create_course(self, jwt_client, instructor):
+    def test_instructor_can_create_own_draft_course(self, jwt_client, instructor):
         response = jwt_client(instructor).post(
             "/api/v1/courses/",
             {
@@ -510,7 +510,7 @@ class TestPermissionsByRole:
             },
             format="json",
         )
-        assert response.status_code == 403
+        assert response.status_code == 201
 
     def test_student_cannot_access_admin_payment_list(self, jwt_client, student):
         response = jwt_client(student).get("/api/v1/payments/all/")
