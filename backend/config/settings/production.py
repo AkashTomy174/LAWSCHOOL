@@ -5,6 +5,8 @@ Everything here fails *closed*: if a required secret is missing the process
 refuses to start rather than silently running with a development default.
 """
 
+import os
+
 from .base import *  # noqa: F401,F403
 from .base import env, env_bool, env_list
 
@@ -19,6 +21,24 @@ if _missing:
     raise RuntimeError(
         "Missing required production environment variables: " + ", ".join(_missing)
     )
+
+from .base import SIMPLE_JWT, secret_problem  # noqa: E402
+
+_secret_names = ["SECRET_KEY"]
+if "JWT_SECRET" in os.environ:  # set but possibly blank: validate what is there
+    _secret_names.append("JWT_SECRET")
+_bad_secrets = [
+    f"{name} {secret_problem(os.environ.get(name))}"
+    for name in _secret_names
+    if secret_problem(os.environ.get(name))
+]
+if _bad_secrets:
+    raise RuntimeError(
+        "Unsafe production secrets: " + "; ".join(_bad_secrets) + ". "
+        "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+    )
+if SIMPLE_JWT["ALGORITHM"] != "HS256":  # signing key below is a shared secret
+    raise RuntimeError("SIMPLE_JWT ALGORITHM must be HS256 with a shared secret.")
 
 _integration_required = [
     "RAZORPAY_KEY_ID",

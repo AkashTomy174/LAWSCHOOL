@@ -13,7 +13,7 @@ import sys
 
 BASE_ENV = {
     "DJANGO_SETTINGS_MODULE": "config.settings.production",
-    "SECRET_KEY": "x" * 50,
+    "SECRET_KEY": "k3Jx9vQ2mZ8pL5rT1wY7nB4cD6fG0hA2sE9uI3oP8qR5tV1y",
     "DATABASE_URL": "postgres://u:p@localhost:1/x",
     "REDIS_URL": "redis://localhost:1/0",
     "CORS_ALLOWED_ORIGINS": "https://app.test",

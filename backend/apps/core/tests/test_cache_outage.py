@@ -112,5 +112,5 @@ class TestPlaybackAndLeaderboard:
         response = auth_client(student).get(f"/api/v1/videos/{lesson.video.playback_uid}/playback/")
         assert response.status_code == 403
 
-    def test_leaderboard_top_still_loads(self, db, cache_down, api_client):
-        assert api_client.get("/api/v1/leaderboard/top/").status_code == 200
+    def test_leaderboard_top_still_loads(self, db, cache_down, auth_client, student):
+        assert auth_client(student).get("/api/v1/leaderboard/top/").status_code == 200

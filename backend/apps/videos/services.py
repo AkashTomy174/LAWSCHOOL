@@ -22,12 +22,13 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.core.cache import cache_set, report_cache_failure
 from apps.core.constants import VideoStatus
 from apps.core.exceptions import (
+    ConflictError,
     EntitlementError,
     PlaybackUnavailableError,
     RateLimitedError,
@@ -426,12 +427,24 @@ def register_video(
     # ``require_signed_urls`` records what Cloudflare has *confirmed*: it starts
     # false and playback stays closed until enforcement succeeds (here, or on a
     # later sync).
-    video = Video.objects.create(
-        title=title,
-        description=description,
-        cloudflare_video_id=cloudflare_video_id,
-        require_signed_urls=False,
-    )
+    try:
+        # Own savepoint so a lost race does not poison an outer transaction.  The
+        # database unique constraint (not the serializer's pre-check) is what
+        # actually guarantees one row per Cloudflare asset.
+        with transaction.atomic():
+            video = Video.objects.create(
+                title=title,
+                description=description,
+                cloudflare_video_id=cloudflare_video_id,
+                require_signed_urls=False,
+            )
+    except IntegrityError:
+        if Video.objects.filter(cloudflare_video_id=cloudflare_video_id).exists():
+            raise ConflictError(
+                {"detail": "This Cloudflare video is already registered."},
+                code="video_already_registered",
+            )
+        raise  # an unrelated integrity failure must not be reported as a duplicate
     video.require_signed_urls = _enforce_signed_only(video)
     video.save(update_fields=["require_signed_urls", "updated_at"])
     return sync_video_metadata(video)

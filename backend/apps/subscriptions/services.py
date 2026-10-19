@@ -348,10 +348,17 @@ def _subscription_decision(user, course) -> AccessDecision:
     else:
         # Differentiate "never subscribed" from "lapsed" so the UI can show the
         # right call to action (Buy vs Renew).
+        # Only subscriptions that were really held count as "lapsed"; failed or
+        # pending checkout rows never granted access.
+        had_subscription = user.subscriptions.filter(
+            status__in=[
+                SubscriptionStatus.ACTIVE,
+                SubscriptionStatus.EXPIRED,
+                SubscriptionStatus.CANCELLED,
+            ]
+        ).exists()
         decision = (
-            DENY_SUBSCRIPTION_EXPIRED
-            if user.subscriptions.exists()
-            else DENY_NO_SUBSCRIPTION
+            DENY_SUBSCRIPTION_EXPIRED if had_subscription else DENY_NO_SUBSCRIPTION
         )
 
     if cache_key is not _UNAVAILABLE:

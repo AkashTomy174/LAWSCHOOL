@@ -60,27 +60,6 @@ export default function Subscription() {
     }
   }
 
-  async function handleCancel() {
-    if (
-      !window.confirm(
-        "Cancel your subscription? Access continues until the end of the paid term.",
-      )
-    ) {
-      return;
-    }
-    try {
-      await subscriptionService.cancel({ immediate: false });
-      pushToast({
-        message:
-          "Subscription cancelled. Access continues until the term ends.",
-        tone: "success",
-      });
-      mine.refetch({ silent: true });
-    } catch (caught) {
-      pushToast({ message: caught.message, tone: "error" });
-    }
-  }
-
   const statusTag = (status) =>
     status === "captured" || status === "active"
       ? "tag-ok"
@@ -136,6 +115,10 @@ export default function Subscription() {
                 {formatDaysRemaining(active.days_remaining)}, until{" "}
                 {formatDate(active.end_date)}
               </p>
+              <p className="small !text-[#B4BED6]">
+                Your plan does not renew and you will not be charged again.
+                Access ends on {formatDate(active.end_date)}.
+              </p>
               {active.payment_reference && (
                 <p className="mono cap !text-[#8E9AB8]">
                   Ref {active.payment_reference}
@@ -146,13 +129,6 @@ export default function Subscription() {
               <Link to="/courses" className="btn btn-gold">
                 Go to my courses
               </Link>
-              <button
-                type="button"
-                className="btn btn-on-navy"
-                onClick={handleCancel}
-              >
-                Cancel renewal
-              </button>
             </div>
           </div>
         ) : (

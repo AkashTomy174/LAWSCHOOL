@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.core.constants import PaymentStatus, SubscriptionStatus
-from apps.payments import gateway
+from apps.payments import gateway, services
 from apps.payments.models import Payment, WebhookEvent
 from apps.subscriptions.models import Subscription
 
@@ -463,7 +463,9 @@ class TestWebhookIdempotency:
         assert second.data["status"] == "duplicate"
 
         # Exactly one event row and exactly one subscription extension.
-        assert WebhookEvent.objects.filter(event_id="evt_duplicate_1").count() == 1
+        # Identity is the signed body, not the (unsigned) header id.
+        assert WebhookEvent.objects.filter(event_id=services.webhook_event_id(body)).count() == 1
+        assert WebhookEvent.objects.count() == 1
         assert Subscription.objects.filter(user=student).count() == 1
 
     def test_duplicate_webhook_does_not_extend_subscription_twice(
@@ -717,7 +719,7 @@ class TestFailedAndRefundedPayments:
             HTTP_X_RAZORPAY_EVENT_ID="evt_ghost",
         )
         assert response.status_code == 200
-        assert WebhookEvent.objects.filter(event_id="evt_ghost").exists()
+        assert WebhookEvent.objects.filter(event_id=services.webhook_event_id(body)).exists()
 
 
 class TestGatewaySignatureUnit:

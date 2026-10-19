@@ -85,21 +85,25 @@ def activate_subscription(
 @transaction.atomic
 def mark_subscription_failed(
     *, subscription: Subscription | None, user, plan: Plan
-) -> Subscription:
-    """Record a failed attempt (payment declined, signature mismatch, ...).
+) -> Subscription | None:
+    """Record a failed attempt against an *existing* subscription row only.
 
-    A FAILED row is deliberately kept: it gives support a paper trail and lets the
-    UI say "your last payment failed" rather than showing nothing at all.
+    A failed or forged payment must not manufacture subscription rows: the audit
+    trail for a failure is the ``Payment`` row itself (status + failure_reason).
+    Creating a row per failure let a user pile up junk records and made a user who
+    never subscribed look like a lapsed one.  An ACTIVE subscription is never
+    downgraded by a failed *renewal* attempt.
     """
-    if subscription is None:
-        subscription = Subscription.objects.create(user=user, plan=plan)
-    subscription.status = SubscriptionStatus.FAILED
-    subscription.save(update_fields=["status", "updated_at"])
-    invalidate_entitlement_cache(user)
-    logger.warning(
-        "Subscription marked failed",
-        extra={"subscription_id": str(subscription.pk), "user_id": str(user.pk)},
-    )
+    if subscription is None or subscription.status == SubscriptionStatus.ACTIVE:
+        return subscription
+    if subscription.status != SubscriptionStatus.FAILED:
+        subscription.status = SubscriptionStatus.FAILED
+        subscription.save(update_fields=["status", "updated_at"])
+        invalidate_entitlement_cache(user)
+        logger.warning(
+            "Subscription marked failed",
+            extra={"subscription_id": str(subscription.pk), "user_id": str(user.pk)},
+        )
     return subscription
 
 

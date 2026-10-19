@@ -607,6 +607,8 @@ class TestProgressEndpoints:
         update_video_progress(user=student, video=lesson.video, position_seconds=60)
         response = jwt_client(student).get("/api/v1/progress/")
         assert response.data["count"] == 1
+        # The progress page labels each row with its lesson.
+        assert response.data["results"][0]["lesson_title"] == lesson.title
 
         # The other student has no progress and must see an empty list.
         from django.contrib.auth import get_user_model
@@ -619,6 +621,16 @@ class TestProgressEndpoints:
         )
         response = jwt_client(other_student).get("/api/v1/progress/")
         assert response.data["count"] == 0
+
+    def test_progress_row_without_a_lesson_still_serializes(
+        self, jwt_client, student, video
+    ):
+        from apps.videos.models import VideoProgress
+
+        VideoProgress.objects.create(user=student, video=video, lesson=None)
+        (row,) = jwt_client(student).get("/api/v1/progress/").data["results"]
+        assert row["lesson_id"] is None
+        assert row["lesson_title"] == ""
 
     def test_course_progress_aggregates_correctly(
         self, jwt_client, student, course, lesson, active_subscription
@@ -646,25 +658,48 @@ class TestVideoAdminEndpoints:
         )
         assert response.status_code == 403
 
-    def test_instructor_cannot_register_a_video(self, jwt_client, lesson):
-        """Video editing is admin-only -- even on the instructor's own lesson.
-
-        Regression: any instructor could swap the video on any lesson.
-        """
-        original = lesson.video_id
-        response = jwt_client(lesson.section.course.instructor).post(
+    def test_instructor_must_name_a_lesson_to_register_a_video(
+        self, jwt_client, instructor
+    ):
+        response = jwt_client(instructor).post(
             "/api/v1/videos/register/",
-            {"title": "Swap", "cloudflare_video_id": "evil", "lesson": str(lesson.pk)},
+            {"title": "Loose", "cloudflare_video_id": "cf-loose"},
             format="json",
         )
         assert response.status_code == 403
-        lesson.refresh_from_db()
-        assert lesson.video_id == original
 
-    def test_instructor_cannot_request_an_upload_url_or_sync(
-        self, jwt_client, instructor, lesson
+    def test_instructor_can_register_a_video_on_own_lesson(
+        self, jwt_client, lesson, monkeypatch
     ):
-        client = jwt_client(instructor)
+        from unittest import mock
+
+        owner = lesson.section.course.instructor
+        fake = mock.MagicMock()
+        fake.get_video.return_value = {"creator": str(owner.pk), "duration": 60}
+        monkeypatch.setattr("apps.videos.services.client", fake)
+        response = jwt_client(owner).post(
+            "/api/v1/videos/register/",
+            {"title": "Mine", "cloudflare_video_id": "cf-own", "lesson": str(lesson.pk)},
+            format="json",
+        )
+        assert response.status_code == 201, response.data
+        lesson.refresh_from_db()
+        assert lesson.video.cloudflare_video_id == "cf-own"
+
+    def test_instructor_can_sync_own_video(self, jwt_client, lesson, monkeypatch):
+        from unittest import mock
+
+        fake = mock.MagicMock()
+        fake.get_video.return_value = {"status": {"state": "ready"}, "duration": 60}
+        monkeypatch.setattr("apps.videos.services.client", fake)
+        owner = lesson.section.course.instructor
+        url = f"/api/v1/videos/{lesson.video.playback_uid}/sync/"
+        assert jwt_client(owner).post(url).status_code == 200
+
+    def test_student_cannot_request_an_upload_url_or_sync(
+        self, jwt_client, student, lesson
+    ):
+        client = jwt_client(student)
         assert client.post("/api/v1/videos/upload-url/").status_code == 403
         sync_url = f"/api/v1/videos/{lesson.video.playback_uid}/sync/"
         assert client.post(sync_url).status_code == 403

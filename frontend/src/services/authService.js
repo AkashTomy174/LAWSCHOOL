@@ -15,7 +15,8 @@ export const authService = {
       password,
       password_confirm: passwordConfirm,
     });
-    tokenStore.set(response.data.tokens);
+    // 202 with a neutral message: the API answers identically for new and
+    // existing addresses, so no tokens come back. The caller signs in separately.
     return response.data;
   },
 

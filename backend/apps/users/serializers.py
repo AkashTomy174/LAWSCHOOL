@@ -79,13 +79,15 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ("email", "name", "phone", "password", "password_confirm")
 
+    # Declared explicitly so ModelSerializer does not attach its UniqueValidator,
+    # which would answer "this email is taken" on the field.
+    email = serializers.EmailField(max_length=254)
+
     def validate_email(self, value: str) -> str:
-        email = value.strip().lower()
-        if User.objects.filter(email=email).exists():
-            raise serializers.ValidationError(
-                "An account with this email already exists."
-            )
-        return email
+        # Deliberately no "already exists" error: the response must be the same for
+        # new and existing addresses (see RegisterView), so existence is handled in
+        # the view, never surfaced as a field error.
+        return value.strip().lower()
 
     def validate(self, attrs: dict) -> dict:
         if attrs["password"] != attrs.pop("password_confirm"):
@@ -102,20 +104,18 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Adds role/name claims to the tokens so the SPA can render without a 2nd call.
-
-    Only non-sensitive claims are embedded -- never permissions that the backend
-    then *trusts* for authorization.
-    """
+    """Adds a ``role`` hint claim; the backend never trusts it for authorization."""
 
     username_field = User.USERNAME_FIELD
 
     @classmethod
     def get_token(cls, user: User):
         token = super().get_token(user)
+        # Identity is the standard ``user_id`` claim.  Name and email are PII and
+        # nothing consumes them from the token (the SPA reads the ``user`` object
+        # returned next to it), so they are no longer embedded.  Tokens issued
+        # before this change keep their old claims until the user next signs in.
         token["role"] = user.role
-        token["name"] = user.get_full_name()
-        token["email"] = user.email
         return token
 
     def validate(self, attrs: dict) -> dict:

@@ -89,10 +89,23 @@ export function AuthProvider({ children }) {
 
   const register = useCallback(async (payload) => {
     setError(null);
-    const data = await authService.register(payload);
-    setUser(data.user);
-    setStatus("authenticated");
-    return data.user;
+    await authService.register(payload);
+    // The register endpoint is deliberately neutral (same answer whether or not the
+    // email already had an account), so sign in with the credentials just entered.
+    // For a brand-new account this succeeds; for an existing one with a different
+    // password it fails, and the caller shows the neutral "check your email" notice.
+    try {
+      const data = await authService.login({
+        email: payload.email,
+        password: payload.password,
+      });
+      setUser(data.user);
+      setStatus("authenticated");
+      return data.user;
+    } catch (caught) {
+      if (caught?.status === 401) return null;
+      throw caught;
+    }
   }, []);
 
   const logout = useCallback(async () => {

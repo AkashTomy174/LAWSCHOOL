@@ -60,7 +60,7 @@ class TestFailuresAreContained:
              "password_confirm": "A-strong-pass-123"},
             format="json",
         )
-        assert response.status_code == 201, response.data
+        assert response.status_code == 202, response.data
         from apps.notifications.models import Notification
 
         note = Notification.objects.get(user__email="new@test.local", channel="email")

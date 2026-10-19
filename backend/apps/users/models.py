@@ -23,11 +23,22 @@ from django.contrib.auth.models import (
     BaseUserManager,
     PermissionsMixin,
 )
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.core.constants import UserRole
+
+
+class LastAdminError(Exception):
+    """The change would leave the platform with no active administrator."""
+
+
+_ADMIN_FIELDS = {"role", "is_active", "is_staff", "is_superuser"}
+
+
+def _is_active_admin(role, is_active, is_staff, is_superuser) -> bool:
+    return bool(is_active and (role == UserRole.ADMIN or is_staff or is_superuser))
 
 
 class UserManager(BaseUserManager):
@@ -164,6 +175,57 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def is_admin_role(self) -> bool:
         return self.role == UserRole.ADMIN
+
+    # ---- last-administrator guard --------------------------------------- #
+    @classmethod
+    def _other_active_admins(cls, exclude_pk):
+        return (
+            cls.objects.select_for_update()
+            .filter(is_active=True)
+            .filter(
+                models.Q(role=UserRole.ADMIN)
+                | models.Q(is_staff=True)
+                | models.Q(is_superuser=True)
+            )
+            .exclude(pk=exclude_pk)
+        )
+
+    def _guard_last_admin(self, *, deleting: bool = False) -> None:
+        """Refuse a save/delete that removes the final active administrator.
+
+        Runs inside the caller's transaction and locks the administrator rows
+        (``SELECT ... FOR UPDATE`` on PostgreSQL), so two concurrent demotions of
+        different admins serialise and the second one sees the first's result.
+        Enforced on the model so the API, Django admin and shell share one rule.
+        Bulk ``QuerySet.update()`` bypasses model code by design of Django.
+        """
+        if self._state.adding:
+            return
+        previous = (
+            type(self).objects.select_for_update().filter(pk=self.pk).first()
+        )
+        if previous is None or not _is_active_admin(
+            previous.role, previous.is_active, previous.is_staff, previous.is_superuser
+        ):
+            return
+        stays_admin = not deleting and _is_active_admin(
+            self.role, self.is_active, self.is_staff, self.is_superuser
+        )
+        if not stays_admin and not self._other_active_admins(self.pk).exists():
+            raise LastAdminError("At least one active administrator must remain.")
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or _ADMIN_FIELDS & set(update_fields):
+            with transaction.atomic():
+                self._guard_last_admin()
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            self._guard_last_admin(deleting=True)
+            return super().delete(*args, **kwargs)
 
     def clean(self) -> None:
         super().clean()

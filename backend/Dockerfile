@@ -58,7 +58,9 @@ COPY . .
 
 # Static files are collected at build time.  WhiteNoise serves them, so the image
 # is self-contained and needs no separate webserver for the API.
-RUN SECRET_KEY=build-only-not-a-real-secret \
+# Throw-away value so collectstatic can import the production settings; it is not
+# stored in the image environment and passes the startup secret validation.
+RUN SECRET_KEY=0b1d7a52c9e84f3aa6d1e0c47f93b85d2e6a1c9047bd38f5 \
     DATABASE_URL=postgres://build:build@localhost:5432/build \
     REDIS_URL=redis://localhost:6379/0 \
     CORS_ALLOWED_ORIGINS=http://localhost:5173 \
@@ -81,8 +83,10 @@ USER appuser
 
 EXPOSE 8000
 
+# The Host header is explicit: ALLOWED_HOSTS (deliberately) has no 'localhost' in
+# production, so a bare curl to localhost is rejected with HTTP 400.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://localhost:8000/health/ || exit 1
+    CMD curl -fsS -H "Host: healthcheck.railway.app" http://localhost:8000/health/ || exit 1
 
 # Migrations are deliberately NOT run here: every replica would race to apply
 # them.  Run them once as a release step (see docs/deployment.md).

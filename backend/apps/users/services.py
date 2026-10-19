@@ -7,13 +7,14 @@ the result to a response.
 from __future__ import annotations
 
 from django.conf import settings
-from django.contrib.auth.tokens import (
-    PasswordResetTokenGenerator,
-    default_token_generator,
-)
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_bytes, force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.http import (
+    base36_to_int,
+    urlsafe_base64_decode,
+    urlsafe_base64_encode,
+)
 
 from apps.core.logging import get_logger
 from apps.users.models import User
@@ -35,7 +36,29 @@ class EmailVerificationTokenGenerator(PasswordResetTokenGenerator):
         return f"{user.pk}{user.is_email_verified}{timestamp}"
 
 
+class ShortLivedResetTokenGenerator(PasswordResetTokenGenerator):
+    """Password-reset tokens that expire after ``PASSWORD_RESET_LINK_SECONDS``.
+
+    Django's own ``PASSWORD_RESET_TIMEOUT`` (default 3 days) is shared with the
+    email-verification generator above, which should stay long-lived, so the
+    shorter reset window is applied here.  The salt and hash are unchanged, so
+    links already in inboxes keep working (until the new, shorter limit).  A link
+    is still single-use: the hash covers the password hash and ``last_login``.
+    """
+
+    def check_token(self, user, token):
+        if not super().check_token(user, token):
+            return False
+        try:
+            issued = base36_to_int(token.split("-")[0])
+        except (ValueError, AttributeError):
+            return False
+        age = self._num_seconds(self._now()) - issued
+        return age <= settings.PASSWORD_RESET_LINK_SECONDS
+
+
 email_verification_token = EmailVerificationTokenGenerator()
+password_reset_token = ShortLivedResetTokenGenerator()
 
 
 def create_student(*, email: str, name: str, password: str, phone: str = "") -> User:
@@ -99,12 +122,19 @@ def request_password_reset(email: str) -> None:
         return
 
     uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = default_token_generator.make_token(user)
+    token = password_reset_token.make_token(user)
     reset_url = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
 
     from apps.notifications.services import notify_user
 
-    notify_user(user=user, kind="password_reset", context={"reset_url": reset_url})
+    notify_user(
+        user=user,
+        kind="password_reset",
+        context={
+            "reset_url": reset_url,
+            "reset_minutes": max(1, settings.PASSWORD_RESET_LINK_SECONDS // 60),
+        },
+    )
 
 
 def confirm_password_reset(*, uid: str, token: str, new_password: str) -> User:
@@ -116,7 +146,7 @@ def confirm_password_reset(*, uid: str, token: str, new_password: str) -> User:
     from apps.core.exceptions import DomainError
 
     user = _user_from_uid(uid)
-    if user is None or not default_token_generator.check_token(user, token):
+    if user is None or not password_reset_token.check_token(user, token):
         raise DomainError(
             {"detail": "This reset link is invalid or has expired."},
             code="invalid_token",

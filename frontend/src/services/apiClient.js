@@ -16,11 +16,14 @@ import axios from "axios";
  *   made; the rest await the same promise. Without this, refresh-token rotation
  *   would break: the second concurrent refresh would use an already-blacklisted
  *   token and log the student out.
- * * **No token in localStorage by default preference.** Tokens live in
+ * * **Token storage (known trade-off).** Tokens live in
  *   localStorage because the API is JWT-based and the SPA is served from a
  *   different origin during development. The trade-off (XSS exposure) is
- *   documented in docs/architecture.md; the mitigation is a strict CSP plus
- *   short access-token lifetimes.
+ *   documented in docs/architecture.md. A restrictive CSP (vercel.json /
+ *   csp.conf) and short access-token lifetimes REDUCE the chance and impact of
+ *   XSS but do not make localStorage safe: any script that runs on this origin
+ *   can read both tokens. The real fix is HttpOnly cookie sessions, a separate
+ *   migration (see docs/security-remediation.md).
  */
 
 const ACCESS_TOKEN_KEY = "lawschool.access";
@@ -83,10 +86,15 @@ export function toApiError(error) {
   if (error?.response) {
     const payload = error.response.data;
     const envelope = payload?.error;
+    // The lesson watch endpoint answers a locked lesson with `{access: {reason, detail}}`.
+    const access = payload?.access;
     return {
       status: error.response.status,
-      code: envelope?.code || "http_error",
-      message: envelope?.message || "The request could not be completed.",
+      code: envelope?.code || access?.reason || "http_error",
+      message:
+        envelope?.message ||
+        access?.detail ||
+        "The request could not be completed.",
       details: envelope?.details || null,
       isNetworkError: false,
     };
@@ -141,6 +149,12 @@ apiClient.interceptors.response.use(
         onSessionExpired();
         return Promise.reject(toApiError(error));
       }
+    }
+
+    // Nothing to refresh with (e.g. a password change cleared the tokens): the
+    // session is over, so stop the UI from acting signed in.
+    if (status === 401 && !isAuthEndpoint && !tokenStore.getRefresh()) {
+      onSessionExpired();
     }
 
     return Promise.reject(toApiError(error));

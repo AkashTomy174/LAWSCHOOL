@@ -114,7 +114,7 @@ class PaymentWebhookView(APIView):
     permission_classes = [AllowAny]
     parser_classes = [JSONParser]
     throttle_classes = [ResilientScopedRateThrottle]
-    throttle_scope = "webhook"
+    throttle_scope = "webhook_razorpay"
 
     @extend_schema(
         request=None,
@@ -131,12 +131,8 @@ class PaymentWebhookView(APIView):
         except Exception:
             payload = {}
 
-        if not event_id:
-            # Razorpay always sends this header; without it we cannot deduplicate.
-            # Fall back to a hash so the event is still logged exactly once.
-            import hashlib
-
-            event_id = f"sha256:{hashlib.sha256(raw_body).hexdigest()[:40]}"
+        # The header is unsigned, so it is only used for log correlation;
+        # process_webhook derives the real, content-addressed event id.
 
         event_type = payload.get("event") or request.headers.get(
             "X-Razorpay-Event-Type", ""
@@ -158,7 +154,13 @@ class PaymentWebhookView(APIView):
             code = code_for(exc)
             http_status = (
                 status.HTTP_400_BAD_REQUEST
-                if code in {"invalid_signature", "unknown_order", "forbidden"}
+                if code
+                in {
+                    "invalid_signature",
+                    "unknown_order",
+                    "forbidden",
+                    "invalid_timestamp",
+                }
                 else status.HTTP_500_INTERNAL_SERVER_ERROR
             )
             return Response(

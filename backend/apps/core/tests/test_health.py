@@ -55,7 +55,7 @@ def test_production_settings_let_railways_healthcheck_through():
     env = {
         **os.environ,
         "DJANGO_SETTINGS_MODULE": "config.settings.production",
-        "SECRET_KEY": "x" * 50, "DATABASE_URL": "postgres://u:p@localhost:1/x",
+        "SECRET_KEY": "k3Jx9vQ2mZ8pL5rT1wY7nB4cD6fG0hA2sE9uI3oP8qR5tV1y", "DATABASE_URL": "postgres://u:p@localhost:1/x",
         "REDIS_URL": "redis://localhost:1/0", "CORS_ALLOWED_ORIGINS": "https://app.test",
         "ALLOWED_HOSTS": "api.test",
         **{k: "d" for k in ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET",

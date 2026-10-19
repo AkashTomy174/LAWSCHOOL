@@ -57,9 +57,20 @@ export default function Register() {
 
     setSubmitting(true);
     try {
-      await register(form);
-      // Registration signs the student in, so send them straight to the dashboard.
-      navigate("/dashboard", { replace: true });
+      const user = await register(form);
+      if (user) {
+        // A new account is signed in straight away.
+        navigate("/dashboard", { replace: true });
+      } else {
+        // Neutral outcome: never say whether the address was already registered.
+        navigate("/login", {
+          replace: true,
+          state: {
+            notice:
+              "If this email can be registered, your account is ready. If you already have an account, sign in or reset your password.",
+          },
+        });
+      }
     } catch (caught) {
       const mapped = fieldErrorsFrom(caught);
       if (Object.keys(mapped).length) {

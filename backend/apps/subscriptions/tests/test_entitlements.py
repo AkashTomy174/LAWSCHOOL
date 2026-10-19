@@ -137,7 +137,8 @@ class TestCancelledAndPending:
         invalidate_entitlement_cache(student)
         decision = can_user_access_course(student, course)
         assert decision.allowed is False
-        assert decision.reason == "subscription_expired"  # has history -> "renew"
+        # A pending checkout never granted access, so this is "buy", not "renew".
+        assert decision.reason == "subscription_required"
 
     def test_failed_subscription_denies_access(self, student, course, plan):
         from apps.subscriptions.models import Subscription
@@ -390,3 +391,50 @@ class TestEntitlementEndpoints:
         expired_subscription.refresh_from_db()
         assert count == 1
         assert expired_subscription.status == "expired"
+
+
+class TestCancellationIsTruthful:
+    """Plans never renew, so only an immediate cancellation may change anything."""
+
+    URL = "/api/v1/subscriptions/me/cancel/"
+
+    def test_non_immediate_cancel_is_refused_and_writes_nothing(
+        self, jwt_client, student, course, active_subscription
+    ):
+        response = jwt_client(student).post(self.URL, {}, format="json")
+        assert response.status_code == 400
+        assert response.data["error"]["code"] == "not_renewing"
+        active_subscription.refresh_from_db()
+        assert active_subscription.status == "active"
+        assert active_subscription.cancelled_at is None
+        assert can_user_access_course(student, course).allowed is True
+
+    def test_requires_authentication(self, api_client, active_subscription):
+        assert api_client.post(self.URL, {"immediate": True}, format="json").status_code == 401
+        active_subscription.refresh_from_db()
+        assert active_subscription.status == "active"
+
+    def test_cannot_touch_another_users_subscription(
+        self, jwt_client, other_student, student, course, active_subscription
+    ):
+        # The endpoint takes no id: it can only ever act on the caller's own row.
+        response = jwt_client(other_student).post(self.URL, {"immediate": True}, format="json")
+        assert response.data["error"]["code"] == "no_active_subscription"
+        active_subscription.refresh_from_db()
+        assert active_subscription.status == "active"
+        assert can_user_access_course(student, course).allowed is True
+
+    def test_repeated_immediate_cancel_is_safe(self, jwt_client, student, active_subscription):
+        client = jwt_client(student)
+        assert client.post(self.URL, {"immediate": True}, format="json").status_code == 200
+        again = client.post(self.URL, {"immediate": True}, format="json")
+        assert again.status_code == 400
+        assert again.data["error"]["code"] == "no_active_subscription"
+        active_subscription.refresh_from_db()
+        assert active_subscription.status == "cancelled"
+
+    def test_expired_subscription_has_nothing_to_cancel(
+        self, jwt_client, student, expired_subscription
+    ):
+        response = jwt_client(student).post(self.URL, {"immediate": True}, format="json")
+        assert response.data["error"]["code"] == "no_active_subscription"

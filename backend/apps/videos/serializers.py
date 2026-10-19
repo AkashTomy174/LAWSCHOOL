@@ -40,6 +40,11 @@ class VideoSerializer(serializers.ModelSerializer):
 class VideoAdminSerializer(serializers.ModelSerializer):
     """Admin/instructor view -- includes the Cloudflare id for support work."""
 
+    lesson_title = serializers.CharField(source="lesson.title", read_only=True, default=None)
+    course_title = serializers.CharField(
+        source="lesson.section.course.title", read_only=True, default=None
+    )
+
     class Meta:
         model = Video
         fields = (
@@ -56,6 +61,8 @@ class VideoAdminSerializer(serializers.ModelSerializer):
             "last_synced_at",
             "created_at",
             "updated_at",
+            "lesson_title",
+            "course_title",
         )
         read_only_fields = (
             "require_signed_urls",
@@ -114,6 +121,9 @@ class PlaybackRequestSerializer(serializers.Serializer):
 
 class VideoProgressSerializer(serializers.ModelSerializer):
     lesson_id = serializers.UUIDField(source="lesson.id", read_only=True, default=None)
+    lesson_title = serializers.CharField(
+        source="lesson.title", read_only=True, default=""
+    )
     video_uid = serializers.UUIDField(source="video.playback_uid", read_only=True)
 
     class Meta:
@@ -121,6 +131,7 @@ class VideoProgressSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "lesson_id",
+            "lesson_title",
             "video_uid",
             "watched_seconds",
             "last_position",

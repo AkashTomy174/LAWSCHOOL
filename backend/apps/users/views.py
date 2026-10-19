@@ -7,6 +7,7 @@ services layer -- never by the SPA.
 
 from __future__ import annotations
 
+from django.db import IntegrityError
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -24,7 +25,7 @@ from apps.core.throttling import ResilientScopedRateThrottle
 from apps.core.logging import get_logger
 from apps.core.permissions import IsAdminRole
 from apps.users import services
-from apps.users.models import User
+from apps.users.models import LastAdminError, User
 from apps.users.serializers import (
     AdminUserSerializer,
     EmailTokenObtainPairSerializer,
@@ -51,26 +52,39 @@ class RegisterView(generics.CreateAPIView):
     @extend_schema(
         summary="Register a student",
         responses={
-            201: UserSerializer,
+            202: OpenApiResponse(description="Accepted (same body for any email)"),
             400: OpenApiResponse(description="Validation error"),
         },
     )
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = services.create_student(**serializer.validated_data)
+        data = serializer.validated_data
 
-        # Issue tokens immediately so registration is a single round trip.
-        refresh = RefreshToken.for_user(user)
+        # The answer is identical whether or not the address is already registered
+        # (no tokens, no user object), so this endpoint cannot be used to test which
+        # emails have accounts.  A new address gets its account + verification
+        # email; an existing one gets a password-reset email to its real owner.
+        if User.objects.filter(email=data["email"]).exists():
+            services.request_password_reset(data["email"])
+        else:
+            try:
+                services.create_student(**data)
+            except IntegrityError:
+                # Lost a race with a concurrent registration of the same address.
+                # Only that specific cause is swallowed; anything else propagates.
+                if not User.objects.filter(email=data["email"]).exists():
+                    raise
+                services.request_password_reset(data["email"])
         return Response(
             {
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "access": str(refresh.access_token),
-                    "refresh": str(refresh),
-                },
+                "detail": (
+                    "If this email can be registered, your account is ready and a "
+                    "verification email is on its way. If you already have an "
+                    "account, use Sign in or reset your password."
+                )
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -119,7 +133,16 @@ class LogoutView(APIView):
                 {"detail": "Logged out."}, status=status.HTTP_205_RESET_CONTENT
             )
         try:
-            RefreshToken(raw_refresh).blacklist()
+            token = RefreshToken(raw_refresh)
+            if str(token.get("user_id")) != str(request.user.pk):
+                # Someone else's token: refuse silently.  Same response as an
+                # invalid one, so this cannot be used to probe other sessions.
+                logger.warning(
+                    "Logout attempted with a refresh token owned by another user",
+                    extra={"user_id": str(request.user.pk)},
+                )
+            else:
+                token.blacklist()
         except TokenError:
             # Already expired/blacklisted -- the desired end state holds.
             logger.info(
@@ -316,8 +339,21 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
         if deactivating and user.pk == self.request.user.pk:
             # Locking yourself out leaves no admin to undo it.
             raise ValidationError({"is_active": "You cannot deactivate your own account."})
+        new_role = serializer.validated_data.get("role")
+        if (
+            user.pk == self.request.user.pk
+            and new_role is not None
+            and new_role != user.role
+        ):
+            # Demoting yourself is irreversible without another admin.
+            raise ValidationError({"role": "You cannot change your own role."})
         was_active = user.is_active
-        updated = serializer.save()
+        try:
+            updated = serializer.save()
+        except LastAdminError:
+            raise ValidationError(
+                {"role": "At least one active administrator must remain."}
+            )
         if was_active and not updated.is_active:
             # Access tokens already fail for inactive users; also make sure no
             # open session can be renewed.

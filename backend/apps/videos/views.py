@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,7 +15,6 @@ from rest_framework.views import APIView
 from apps.core.throttling import ResilientScopedRateThrottle
 from apps.core.logging import get_logger
 from apps.core.permissions import (
-    IsAdminRole,
     IsInstructorOrAdmin,
     is_admin,
     is_schema_generation,
@@ -47,7 +48,7 @@ class VideoListView(generics.ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        queryset = Video.objects.select_related("lesson").order_by("-created_at")
+        queryset = Video.objects.select_related("lesson__section__course").order_by("-created_at")
         if not is_admin(self.request):
             queryset = queryset.filter(
                 lesson__section__course__instructor=self.request.user
@@ -63,7 +64,7 @@ class VideoDetailView(generics.RetrieveAPIView):
 
     serializer_class = VideoSerializer
     permission_classes = [IsAuthenticated]
-    queryset = Video.objects.select_related("lesson")
+    queryset = Video.objects.select_related("lesson__section__course")
 
     def get_object(self):
         video = get_object_or_404(self.get_queryset(), playback_uid=self.kwargs["uid"])
@@ -94,7 +95,7 @@ class VideoPlaybackView(APIView):
     )
     def get(self, request, uid):
         video = get_object_or_404(
-            Video.objects.select_related("lesson"), playback_uid=uid
+            Video.objects.select_related("lesson__section__course"), playback_uid=uid
         )
         payload = issue_playback_token(user=request.user, video=video, request=request)
         return Response(payload)
@@ -148,7 +149,7 @@ class VideoProgressUpdateView(APIView):
 
     def post(self, request, uid):
         video = get_object_or_404(
-            Video.objects.select_related("lesson"), playback_uid=uid
+            Video.objects.select_related("lesson__section__course"), playback_uid=uid
         )
         serializer = ProgressUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -254,12 +255,12 @@ class CourseProgressView(APIView):
 class VideoRegisterView(APIView):
     """POST /api/v1/videos/register/ -- bind a Cloudflare asset to a lesson.
 
-    Admin-only: video editing is not an instructor capability.  The admin uploads
-    straight to Cloudflare (``upload-url`` below) so large files never touch the
-    Django server or database.
+    Admins may register any asset; an instructor must attach it to a lesson in a
+    course they own.  Uploads go straight to Cloudflare (``upload-url`` below) so
+    large files never touch the Django server or database.
     """
 
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsInstructorOrAdmin]
 
     @extend_schema(
         request=RegisterVideoSerializer, responses={201: VideoAdminSerializer}
@@ -270,6 +271,11 @@ class VideoRegisterView(APIView):
         data = serializer.validated_data
 
         lesson = data.pop("lesson", None)
+        if not is_admin(request):
+            if lesson is None:
+                raise PermissionDenied("Choose a lesson in one of your courses.")
+            if lesson.section.course.instructor_id != request.user.pk:
+                raise PermissionDenied("You can only add videos to your own courses.")
         video = register_video(
             title=data["title"],
             cloudflare_video_id=data["cloudflare_video_id"],
@@ -290,16 +296,30 @@ class DirectUploadURLView(APIView):
     """POST /api/v1/videos/upload-url/ -- one-time Cloudflare direct-upload URL.
 
     Returns a URL the browser posts the file to directly.  Keeps multi-gigabyte
-    files away from the application server entirely.  Admin-only.
+    files away from the application server entirely.
     """
 
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsInstructorOrAdmin]
+    # Each URL is a billable Cloudflare slot.  The limiter fails closed (see
+    # apps.core.throttling) and is in addition to, not instead of, the role and
+    # ownership checks below.
+    throttle_classes = [ResilientScopedRateThrottle]
+    throttle_scope = "video_upload"
 
     def post(self, request):
+        from apps.courses.models import Course
         from apps.videos.cloudflare import CloudflareStreamError, client
 
+        if not is_admin(request) and not Course.objects.filter(
+            instructor=request.user
+        ).exists():
+            raise PermissionDenied("Create or be assigned a course before uploading.")
+
         try:
-            result = client.create_direct_upload(creator=str(request.user.pk))
+            result = client.create_direct_upload(
+                creator=str(request.user.pk),
+                max_duration_seconds=settings.VIDEO_MAX_DURATION_SECONDS,
+            )
         except CloudflareStreamError as exc:
             return Response(
                 {
@@ -320,14 +340,17 @@ class DirectUploadURLView(APIView):
 
 
 class VideoSyncView(APIView):
-    """POST /api/v1/videos/<uid>/sync/ -- re-pull metadata from Cloudflare (admin)."""
+    """POST /api/v1/videos/<uid>/sync/ -- re-pull metadata (admin, or the course owner)."""
 
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsInstructorOrAdmin]
 
     def post(self, request, uid):
         from apps.videos.services import sync_video_metadata
 
-        # Admin-only (IsAdminRole): video management is not an instructor feature.
         video = get_object_or_404(Video, playback_uid=uid)
+        if not is_admin(request):
+            lesson = getattr(video, "lesson", None)
+            if lesson is None or lesson.section.course.instructor_id != request.user.pk:
+                raise PermissionDenied("You can only sync videos in your own courses.")
         video = sync_video_metadata(video)
         return Response(VideoAdminSerializer(video).data)

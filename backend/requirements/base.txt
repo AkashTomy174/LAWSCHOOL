@@ -1,9 +1,11 @@
 # Core
 
-Django==6.0.1
+Django==6.0.9
 
 djangorestframework==3.18.1
 djangorestframework-simplejwt==5.5.1
+# Transitive (via simplejwt); floor set by pip-audit PYSEC-2026-4141/4183.
+PyJWT>=2.15.0,<3
 cryptography>=43
 django-cors-headers==4.9.0
 django-filter==26.1

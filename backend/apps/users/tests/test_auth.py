@@ -21,7 +21,7 @@ ME_URL = "/api/v1/auth/me/"
 
 
 class TestRegistration:
-    def test_register_creates_student_and_returns_tokens(self, api_client):
+    def test_register_creates_student_without_issuing_tokens(self, api_client):
         response = api_client.post(
             REGISTER_URL,
             {
@@ -33,9 +33,10 @@ class TestRegistration:
             },
             format="json",
         )
-        assert response.status_code == 201, response.data
-        assert "access" in response.data["tokens"]
-        assert "refresh" in response.data["tokens"]
+        assert response.status_code == 202, response.data
+        # Same body for every address, so no tokens / user object here; the client
+        # signs in separately.
+        assert set(response.data) == {"detail"}
 
         user = User.objects.get(email="new.student@test.local")
         assert user.role == "student"
@@ -56,24 +57,26 @@ class TestRegistration:
         )
         assert User.objects.filter(email="mixed@test.local").exists()
 
-    def test_register_rejects_duplicate_email(self, api_client, student):
-        response = api_client.post(
+    def test_register_existing_email_looks_identical_and_creates_nothing(
+        self, api_client, student
+    ):
+        fresh = api_client.post(
             REGISTER_URL,
-            {
-                "email": student.email,
-                "name": "Duplicate",
-                "password": "StrongPass123!",
-                "password_confirm": "StrongPass123!",
-            },
+            {"email": "brand.new@test.local", "name": "N",
+             "password": "StrongPass123!", "password_confirm": "StrongPass123!"},
             format="json",
         )
-        assert response.status_code == 400
-        # The resolver surfaces DRF's specific constraint code ('unique') rather
-        # than flattening it to 'validation_error', so the UI can localise the
-        # message and the test can assert on the real cause.
-        assert response.data["error"]["code"] == "unique"
-        assert "email" in response.data["error"]["details"]
+        duplicate = api_client.post(
+            REGISTER_URL,
+            {"email": student.email, "name": "Duplicate",
+             "password": "StrongPass123!", "password_confirm": "StrongPass123!"},
+            format="json",
+        )
+        assert duplicate.status_code == fresh.status_code == 202
+        assert duplicate.data == fresh.data
         assert User.objects.filter(email=student.email).count() == 1
+        student.refresh_from_db()
+        assert not student.check_password("StrongPass123!")  # nothing was overwritten
 
     def test_register_rejects_mismatched_passwords(self, api_client):
         response = api_client.post(
@@ -121,7 +124,7 @@ class TestRegistration:
             },
             format="json",
         )
-        assert response.status_code == 201
+        assert response.status_code == 202
         user = User.objects.get(email="sneaky@test.local")
         assert user.role == "student"
         assert user.is_staff is False
@@ -138,7 +141,7 @@ class TestRegistration:
             },
             format="json",
         )
-        assert response.status_code == 201
+        assert response.status_code == 202
         body = json.dumps(response.data)
         # The plaintext password must never be echoed back, in any shape.
         assert "StrongPass123!" not in body

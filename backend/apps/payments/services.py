@@ -25,7 +25,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.core.constants import PaymentStatus, SubscriptionStatus
-from apps.core.exceptions import PaymentError
+from apps.core.exceptions import PaymentError, code_for
 from apps.core.logging import get_logger
 from apps.payments import gateway
 from apps.payments.models import Payment, WebhookEvent
@@ -181,24 +181,23 @@ def verify_payment(*, user, order_id: str, payment_id: str, signature: str) -> P
     if payment.status == PaymentStatus.CAPTURED:
         return payment  # idempotent success
 
+    # A refunded payment is terminal.  Its checkout signature is still
+    # cryptographically valid, so without this guard it could be replayed to
+    # re-capture the payment and re-activate the refunded subscription.  This also
+    # runs before the signature check so a bad signature cannot overwrite REFUNDED
+    # with FAILED.
+    _ensure_settleable(payment)
+
     if not gateway.verify_checkout_signature(
         order_id=order_id, payment_id=payment_id, signature=signature
     ):
-        payment.status = PaymentStatus.FAILED
-        payment.failure_reason = "Signature verification failed."
-        payment.provider_payment_id = payment_id
-        payment.provider_signature = signature[:255]
-        payment.save(
-            update_fields=[
-                "status",
-                "failure_reason",
-                "provider_payment_id",
-                "provider_signature",
-                "updated_at",
-            ]
-        )
-        mark_subscription_failed(
-            subscription=payment.subscription, user=payment.user, plan=payment.plan
+        # Recorded under the row lock: a concurrent *valid* verification may have
+        # captured this order since the read above, and must not be overwritten.
+        _record_failure(
+            payment.pk,
+            failure_reason="Signature verification failed.",
+            provider_payment_id=payment_id,
+            provider_signature=signature[:255],
         )
         logger.warning(
             "Payment signature mismatch",
@@ -212,6 +211,77 @@ def verify_payment(*, user, order_id: str, payment_id: str, signature: str) -> P
         )
 
     return _settle_payment(payment=payment, payment_id=payment_id, signature=signature)
+
+
+def _record_failure(
+    payment_pk,
+    *,
+    failure_reason: str,
+    provider_payment_id: str,
+    provider_signature: str | None = None,
+    failure_entity: dict | None = None,
+) -> Payment | None:
+    """Mark a payment FAILED unless a capture or refund already settled it.
+
+    Lock, re-check and write happen in one transaction.  Checking first and
+    writing later let a failure overwrite a concurrent capture; since FAILED is
+    settleable, a later capture webhook then granted the same payment a second
+    term.  Returns ``None`` when the payment was already settled.  (No
+    ``select_related("subscription")``: PostgreSQL refuses FOR UPDATE on the
+    nullable side of an outer join.)
+    """
+    with transaction.atomic():
+        payment = (
+            Payment.objects.select_for_update()
+            .select_related("user", "plan")
+            .get(pk=payment_pk)
+        )
+        if payment.status in {PaymentStatus.CAPTURED, PaymentStatus.REFUNDED}:
+            return None
+        payment.status = PaymentStatus.FAILED
+        payment.failure_reason = failure_reason
+        payment.provider_payment_id = provider_payment_id
+        fields = ["status", "failure_reason", "provider_payment_id", "updated_at"]
+        if provider_signature is not None:
+            payment.provider_signature = provider_signature
+            fields.append("provider_signature")
+        if failure_entity is not None:
+            payment.provider_payload = {
+                **(payment.provider_payload or {}),
+                "failure": failure_entity,
+            }
+            fields.append("provider_payload")
+        payment.save(update_fields=fields)
+        mark_subscription_failed(
+            subscription=payment.subscription, user=payment.user, plan=payment.plan
+        )
+        return payment
+
+
+# States a payment may be settled (captured) from.  FAILED is included because a
+# customer can retry within the same Razorpay order after a declined attempt.
+# REFUNDED is deliberately absent: it is terminal.
+_SETTLEABLE_STATUSES = frozenset(
+    {PaymentStatus.CREATED, PaymentStatus.AUTHORIZED, PaymentStatus.FAILED}
+)
+
+
+def _ensure_settleable(payment: Payment) -> None:
+    if payment.status == PaymentStatus.REFUNDED:
+        logger.warning(
+            "Settlement refused for refunded payment",
+            extra={"payment_id": str(payment.pk)},
+        )
+        raise PaymentError(
+            {"detail": "This payment was refunded and cannot be verified again."},
+            code="payment_refunded",
+        )
+    if payment.status != PaymentStatus.CAPTURED and (
+        payment.status not in _SETTLEABLE_STATUSES
+    ):
+        raise PaymentError(
+            {"detail": "This payment cannot be settled."}, code="payment_not_settleable"
+        )
 
 
 def _settle_payment(
@@ -234,6 +304,9 @@ def _settle_payment(
         )
         if locked.status == PaymentStatus.CAPTURED and locked.subscription_id:
             return locked
+        # Re-checked under the row lock: a refund may have been committed between
+        # the caller's read and this lock.
+        _ensure_settleable(locked)
         return _apply_settlement(
             payment=locked, payment_id=payment_id, signature=signature
         )
@@ -286,6 +359,8 @@ def _notify_payment_success(*, payment: Payment, subscription: Subscription) -> 
                 "plan_name": payment.plan.name,
                 "payment_id": payment.provider_payment_id,
             },
+            # One WhatsApp message per payment, however often the webhook repeats.
+            whatsapp_key=f"payment_success:{payment.pk}",
         )
         notify_user(
             user=payment.user,
@@ -324,6 +399,11 @@ def record_webhook_event(
     under concurrent deliveries from Razorpay's retry mechanism.
     """
     payload_hash = hashlib.sha256(raw_body).hexdigest()
+    # Rows written before content-addressed ids existed carry the provider header
+    # id; a replay of the same signed body must still count as a duplicate.
+    legacy = WebhookEvent.objects.filter(payload_hash=payload_hash).first()
+    if legacy is not None:
+        return legacy, False
     try:
         # The create runs in its own savepoint: when the unique constraint rejects
         # a duplicate, only that savepoint rolls back and any outer transaction
@@ -343,6 +423,41 @@ def record_webhook_event(
         if event is None:  # pragma: no cover - only if the row was deleted mid-flight
             raise
         return event, False
+
+
+def webhook_event_id(raw_body: bytes) -> str:
+    """Content-addressed event id (the DB unique constraint then dedupes replays)."""
+    return f"sha256:{hashlib.sha256(raw_body).hexdigest()[:40]}"
+
+
+def _check_event_age(payload: dict) -> str:
+    """Judge the *signed* ``created_at`` field of a webhook body.
+
+    * ``"ok"``: fresh, or no timestamp supplied.
+    * ``"stale"``: older than ``PAYMENT_WEBHOOK_MAX_AGE_SECONDS``.  Razorpay retries
+      for roughly a day, so the window is days, not minutes; a long-dead signed
+      body replayed by an attacker is dropped without being processed.
+    * raises ``invalid_timestamp`` when present but malformed or in the future by
+      more than ``PAYMENT_WEBHOOK_TOLERANCE_SECONDS`` (clock skew).
+    """
+    from django.conf import settings
+
+    raw = payload.get("created_at") if isinstance(payload, dict) else None
+    if raw is None:
+        return "ok"
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+        raise PaymentError(
+            {"detail": "Malformed webhook timestamp."}, code="invalid_timestamp"
+        )
+    age = timezone.now().timestamp() - float(raw)
+    if age < -settings.PAYMENT_WEBHOOK_TOLERANCE_SECONDS:
+        raise PaymentError(
+            {"detail": "Webhook timestamp is in the future."}, code="invalid_timestamp"
+        )
+    if age > settings.PAYMENT_WEBHOOK_MAX_AGE_SECONDS:
+        logger.warning("Stale webhook ignored", extra={"age_seconds": int(age)})
+        return "stale"
+    return "ok"
 
 
 def process_webhook(
@@ -369,6 +484,15 @@ def process_webhook(
         raise PaymentError(
             {"detail": "Invalid webhook signature."}, code="invalid_signature"
         )
+
+    # The signature covers the body only, so the X-Razorpay-Event-Id header is
+    # attacker-controlled even on a genuine captured request.  Identity is
+    # therefore derived from the signed body itself: a replay with a fresh header
+    # id hashes to the same id and is a duplicate.
+    event_id = webhook_event_id(raw_body)
+    window = _check_event_age(payload)
+    if window == "stale":
+        return {"status": "ignored", "reason": "stale", "event_id": event_id}
 
     event, created = record_webhook_event(
         event_id=event_id,
@@ -455,6 +579,9 @@ def handle_payment_captured(payload: dict) -> dict:
     if payment.status == PaymentStatus.CAPTURED and payment.subscription_id:
         # Already settled by the checkout callback -- nothing to do.
         return {"matched": True, "already_captured": True}
+    if payment.status == PaymentStatus.REFUNDED:
+        # A late or replayed capture must never undo a refund.
+        return {"matched": True, "ignored": "already refunded"}
 
     # Guard against an amount mismatch: someone could capture a INR 1 payment
     # against a INR 10,000 order.
@@ -470,11 +597,16 @@ def handle_payment_captured(payload: dict) -> dict:
         return {"matched": True, "amount_mismatch": True}
 
     # _settle_payment locks the row and re-checks, so a concurrent capture wins once.
-    _settle_payment(
-        payment=payment,
-        payment_id=entity.get("id", payment.provider_payment_id),
-        signature="",
-    )
+    try:
+        _settle_payment(
+            payment=payment,
+            payment_id=entity.get("id", payment.provider_payment_id),
+            signature="",
+        )
+    except PaymentError as exc:
+        if code_for(exc) == "payment_refunded":  # refund won the race for the lock
+            return {"matched": True, "ignored": "already refunded"}
+        raise
     return {"matched": True, "activated": True}
 
 
@@ -484,31 +616,23 @@ def handle_payment_failed(payload: dict) -> dict:
     payment = _find_payment(entity)
     if payment is None:
         return {"matched": False}
-    if payment.status == PaymentStatus.CAPTURED:
-        # A capture already won the race; a late failure event must not undo it.
-        return {"matched": True, "ignored": "already captured"}
-
-    payment.status = PaymentStatus.FAILED
-    payment.provider_payment_id = entity.get("id", payment.provider_payment_id)
     error = (
         entity.get("error_description")
         or entity.get("error_reason")
         or "Payment failed."
     )
-    payment.failure_reason = str(error)[:1000]
-    payment.provider_payload = {**(payment.provider_payload or {}), "failure": entity}
-    payment.save(
-        update_fields=[
-            "status",
-            "provider_payment_id",
-            "failure_reason",
-            "provider_payload",
-            "updated_at",
-        ]
+    # A capture/refund that already won (or wins while this event is in flight)
+    # must not be undone by a late failure -- re-checked under the row lock.
+    failed = _record_failure(
+        payment.pk,
+        failure_reason=str(error)[:1000],
+        provider_payment_id=entity.get("id", payment.provider_payment_id),
+        failure_entity=entity,
     )
-    mark_subscription_failed(
-        subscription=payment.subscription, user=payment.user, plan=payment.plan
-    )
+    if failed is None:
+        payment.refresh_from_db(fields=["status"])
+        return {"matched": True, "ignored": f"already {payment.status}"}
+    payment = failed
     try:
         from apps.notifications.services import notify_user
 
@@ -516,6 +640,7 @@ def handle_payment_failed(payload: dict) -> dict:
             user=payment.user,
             kind="payment_failed",
             context={"plan_name": payment.plan.name, "reason": str(error)},
+            whatsapp_key=f"payment_failed:{payment.pk}",
         )
     except Exception:  # pragma: no cover
         logger.exception("Failed to queue payment-failure notification")

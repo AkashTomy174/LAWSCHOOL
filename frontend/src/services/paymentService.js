@@ -59,13 +59,6 @@ export const subscriptionService = {
     return response.data;
   },
 
-  async cancel({ immediate = false } = {}) {
-    const response = await apiClient.post("/subscriptions/me/cancel/", {
-      immediate,
-    });
-    return response.data;
-  },
-
   /* ---- admin ---- */
   /** Paginated (``{count, results}``): admin pages need the total count too. */
   async all(params = {}) {

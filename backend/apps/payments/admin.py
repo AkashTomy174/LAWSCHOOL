@@ -27,25 +27,19 @@ class PaymentAdmin(admin.ModelAdmin):
     )
     list_select_related = ("user", "plan")
     date_hierarchy = "created_at"
-    readonly_fields = (
-        "id",
-        "provider_order_id",
-        "provider_payment_id",
-        "provider_signature",
-        "provider_payload",
-        "created_at",
-        "updated_at",
-        "captured_at",
-    )
+    # Every field is read-only: a payment's status/amount/ownership may only change
+    # through apps.payments.services (verification, webhooks, refunds), which hold
+    # the row lock and keep the subscription in step.  Editing them here would
+    # bypass that state machine (e.g. flipping REFUNDED back to CAPTURED).
+    readonly_fields = tuple(f.name for f in Payment._meta.fields)
 
     def has_add_permission(self, request):
         # Payments are only ever created by the order service.
         return False
 
-    def get_readonly_fields(self, request, obj=None):
-        if obj is None:
-            return self.readonly_fields
-        return self.readonly_fields
+    def has_delete_permission(self, request, obj=None):
+        # Financial records are kept for audit and dispute handling.
+        return False
 
 
 @admin.register(WebhookEvent)

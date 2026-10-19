@@ -120,7 +120,13 @@ class SubscriptionHistoryView(generics.ListAPIView):
 
 
 class CancelMySubscriptionView(APIView):
-    """POST /api/v1/subscriptions/me/cancel/ -- cancel the active subscription."""
+    """POST /api/v1/subscriptions/me/cancel/ -- end the active subscription now.
+
+    Plans are fixed-term and never renew (checkout only creates one-off orders), so
+    there is no renewal to stop.  Only ``{"immediate": true}`` -- giving up the
+    rest of the term -- changes anything; a non-immediate request is refused
+    rather than recording a cancellation that has no effect.
+    """
 
     permission_classes = [IsAuthenticated]
 
@@ -141,9 +147,23 @@ class CancelMySubscriptionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cancel_subscription(
-            subscription=subscription, immediate=serializer.validated_data["immediate"]
-        )
+        if not serializer.validated_data["immediate"]:
+            return Response(
+                {
+                    "error": {
+                        "code": "not_renewing",
+                        "message": (
+                            "Plans do not renew automatically, so there is nothing "
+                            "to cancel. Your access continues until the end of "
+                            "your term."
+                        ),
+                        "details": {"access_ends": subscription.end_date},
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cancel_subscription(subscription=subscription, immediate=True)
         return Response(
             {
                 "detail": "Subscription cancelled.",
