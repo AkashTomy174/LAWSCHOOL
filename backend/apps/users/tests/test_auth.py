@@ -572,6 +572,7 @@ class TestClientIdentity:
 
 class TestLeaderboardLimit:
     @pytest.mark.parametrize("limit", ["abc", "-5", "0"])
-    def test_bad_limit_does_not_crash(self, api_client, db, limit):
-        response = api_client.get(f"/api/v1/leaderboard/top/?limit={limit}")
+    def test_bad_limit_does_not_crash(self, jwt_client, student, limit):
+        # The board is signed-in only (it lists other students), so authenticate.
+        response = jwt_client(student).get(f"/api/v1/leaderboard/top/?limit={limit}")
         assert response.status_code == 200

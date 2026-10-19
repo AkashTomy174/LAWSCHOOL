@@ -199,15 +199,21 @@ def recalculate_leaderboard(
     return stamp_ranks()
 
 
+# The one ranking order.  ``user_id`` is unique (one entry per student), so the
+# order is total: equal scores still get distinct, stable ranks everywhere.
+RANK_ORDER = (
+    "-total_score",
+    "-lessons_completed",
+    "-courses_completed",
+    "user__date_joined",
+    "user_id",
+)
+
+
 def stamp_ranks() -> int:
     """Assign ``rank`` to every entry using a single ordered scan in SQL."""
     entries = list(
-        LeaderboardEntry.objects.select_related("user").order_by(
-            "-total_score",
-            "-lessons_completed",
-            "-courses_completed",
-            "user__date_joined",
-        )
+        LeaderboardEntry.objects.select_related("user").order_by(*RANK_ORDER)
     )
     updated = []
     for index, entry in enumerate(entries, start=1):
@@ -228,12 +234,7 @@ def top_entries(limit: int = 50):
     return (
         LeaderboardEntry.objects.select_related("user")
         .filter(user__is_active=True, user__role="student")
-        .order_by(
-            "-total_score",
-            "-lessons_completed",
-            "-courses_completed",
-            "user__date_joined",
-        )[:limit]
+        .order_by(*RANK_ORDER)[:limit]
     )
 
 
@@ -248,13 +249,19 @@ def user_rank(user) -> int | None:
         return None
     # Ranked against the same population the leaderboard lists, so "#3" here is
     # the third row there.
+    # Rows strictly ahead under RANK_ORDER, so ties resolve exactly as the list does.
+    t, l, c = entry.total_score, entry.lessons_completed, entry.courses_completed
+    joined = user.date_joined
     ahead = LeaderboardEntry.objects.filter(
         user__role="student", user__is_active=True
     ).filter(
-        Q(total_score__gt=entry.total_score)
-        | Q(
-            total_score=entry.total_score, lessons_completed__gt=entry.lessons_completed
-        )
+        Q(total_score__gt=t)
+        | Q(total_score=t, lessons_completed__gt=l)
+        | Q(total_score=t, lessons_completed=l, courses_completed__gt=c)
+        | Q(total_score=t, lessons_completed=l, courses_completed=c,
+            user__date_joined__lt=joined)
+        | Q(total_score=t, lessons_completed=l, courses_completed=c,
+            user__date_joined=joined, user_id__lt=entry.user_id)
     ).count()
     return ahead + 1
 
@@ -265,7 +272,7 @@ def snapshot_top(limit: int = 20, scope: str = "global") -> LeaderboardSnapshot:
         {
             "rank": index,
             "user_id": str(entry.user_id),
-            "name": entry.user.get_full_name(),
+            "name": entry.user.name or "Student",
             "total_score": entry.total_score,
         }
         for index, entry in enumerate(top_entries(limit=limit), start=1)

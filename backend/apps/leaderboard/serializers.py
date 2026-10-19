@@ -36,7 +36,9 @@ class LeaderboardEntrySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_name(self, obj: LeaderboardEntry) -> str:
-        return obj.user.get_full_name()
+        # ``get_full_name()`` falls back to the email address, which must never be
+        # shown on a board other users can read.
+        return obj.user.name or "Student"
 
     def get_avatar_url(self, obj: LeaderboardEntry) -> str | None:
         if not obj.user.avatar:

@@ -72,7 +72,8 @@ export function Progress() {
                   <span className="flex min-w-0 flex-1 flex-col gap-2">
                     <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="text-[17px] font-medium">
-                        {row.completed ? "Review lesson" : "Resume lesson"}
+                        {row.lesson_title ||
+                          (row.completed ? "Review lesson" : "Resume lesson")}
                       </span>
                       <span className="cap">
                         Updated {formatRelative(row.updated_at)}, at{" "}

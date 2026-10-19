@@ -59,9 +59,10 @@ jobs:
           --health-retries 10
 
     env:
-      # Tests default to in-memory SQLite for speed; this override means the suite
-      # also exercises PostgreSQL.
+      # Tests default to in-memory SQLite for speed; config.settings.test only
+      # leaves SQLite when TEST_DATABASE_URL is set, so CI also exercises PostgreSQL.
       DATABASE_URL: postgres://lawschool:lawschool@localhost:5432/lawschool_test
+      TEST_DATABASE_URL: postgres://lawschool:lawschool@localhost:5432/lawschool_test
       REDIS_URL: redis://localhost:6379/0
       CACHE_BACKEND: redis
       SECRET_KEY: ci-secret-key-not-used-in-production
@@ -98,6 +99,15 @@ jobs:
 
       - name: Django system checks
         run: python manage.py check
+
+      - name: Confirm the suite targets PostgreSQL
+        # Without TEST_DATABASE_URL the test settings fall back to SQLite and the
+        # PostgreSQL-only row-lock tests skip silently; fail loudly instead.
+        run: >-
+          python -c "import django; django.setup();
+          from django.db import connection;
+          assert connection.vendor == 'postgresql', connection.vendor;
+          print('test database:', connection.vendor, connection.settings_dict['NAME'])"
 
       - name: Run test suite
         run: python -m pytest -q --cov=apps --cov-report=term-missing --cov-report=xml

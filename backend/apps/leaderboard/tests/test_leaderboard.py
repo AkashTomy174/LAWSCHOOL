@@ -235,6 +235,17 @@ class TestLeaderboardAPI:
         assert len(response.data["results"]) == 20
         assert response.data["next"] is not None
 
+    def test_listed_ranks_are_live_without_a_rebuild(self, jwt_client, student, quiz):
+        """Ranks come from the row's position, not the periodically stamped column."""
+        for index, other in enumerate(make_students(25)):
+            give_quiz_score(other, quiz, score=index)
+            recalculate_entry(other)  # no stamp_ranks(): stored ranks are all 0
+
+        page2 = jwt_client(student).get("/api/v1/leaderboard/", {"page": 2})
+        assert [row["rank"] for row in page2.data["results"]] == list(range(21, 26))
+        top = jwt_client(student).get("/api/v1/leaderboard/top/", {"limit": 3})
+        assert [row["rank"] for row in top.data["results"]] == [1, 2, 3]
+
     def test_leaderboard_exposes_no_email_addresses(self, jwt_client, student, quiz):
         """Ranking pages are the easiest place to leak personal data."""
         other = make_students(1)[0]
@@ -336,3 +347,43 @@ class TestLeaderboardAPI:
         response = jwt_client(student).get("/api/v1/leaderboard/")
         user_ids = {row["user_id"] for row in response.data["results"]}
         assert str(other.pk) not in user_ids
+
+
+class TestRankConsistency:
+    """The "Your standing" card and the list must agree, ties included."""
+
+    def test_tied_students_get_the_same_rank_in_card_and_list(self, jwt_client, quiz):
+        from apps.leaderboard.models import user_rank
+
+        tied = make_students(6)
+        for student in tied:
+            give_quiz_score(student, quiz, score=5)  # identical on every score key
+            recalculate_entry(student)
+
+        rows = jwt_client(tied[0]).get("/api/v1/leaderboard/").data["results"]
+        listed = {row["user_id"]: row["rank"] for row in rows}
+        assert sorted(listed.values()) == [1, 2, 3, 4, 5, 6]
+        for student in tied:
+            assert user_rank(student) == listed[str(student.pk)]
+            me = jwt_client(student).get("/api/v1/leaderboard/").data["me"]
+            assert me["rank"] == listed[str(student.pk)]
+
+    def test_pages_neither_repeat_nor_skip_tied_students(self, jwt_client, quiz):
+        tied = make_students(25)
+        for student in tied:
+            give_quiz_score(student, quiz, score=3)
+            recalculate_entry(student)
+        client = jwt_client(tied[0])
+        ids = [r["user_id"] for p in (1, 2) for r in client.get("/api/v1/leaderboard/", {"page": p}).data["results"]]
+        assert len(ids) == len(set(ids)) == 25
+
+    def test_staff_and_inactive_users_are_not_ranked(self, jwt_client, quiz, student, instructor):
+        others = make_students(2)
+        for user in (student, *others):
+            give_quiz_score(user, quiz, score=5)
+            recalculate_entry(user)
+        others[0].is_active = False
+        others[0].save()
+        rows = jwt_client(student).get("/api/v1/leaderboard/").data["results"]
+        assert str(others[0].pk) not in {r["user_id"] for r in rows}
+        assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1))

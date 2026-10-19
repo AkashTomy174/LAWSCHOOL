@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.core.cache import cache
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -74,26 +74,38 @@ class LeaderboardView(generics.ListAPIView):
         # an O(page) query rather than an aggregate over the largest tables.
         sort_key = self.request.query_params.get("ordering")
         orderings = {
-            "total_score": ("-total_score", "-lessons_completed", "-courses_completed"),
+            "total_score": lb.RANK_ORDER,
             "quiz_score": ("-quiz_score", "-total_score"),
             "lessons": ("-lessons_completed", "-total_score"),
             "courses": ("-courses_completed", "-total_score"),
             "name": ("user__name",),
         }
         order_by = orderings.get(sort_key, orderings["total_score"])
-        return queryset.order_by(*order_by, "user__date_joined")
+        # Trailing keys make every ordering total (they repeat harmlessly for
+        # total_score), so page boundaries never shuffle tied students.
+        return queryset.order_by(*order_by, "user__date_joined", "user_id")
 
     def list(self, request, *args, **kwargs):
         # My rank is computed with COUNT queries, not by scanning the table.
         page_response = super().list(request, *args, **kwargs)
+        # The stored ``rank`` is only re-stamped by the periodic rebuild (and counts
+        # staff/inactive rows), so number rows by their live position instead.
+        start = self.paginator.page.start_index()
+        for offset, row in enumerate(page_response.data["results"]):
+            row["rank"] = start + offset
         page_response.data["me"] = _my_standing(request.user)
         return page_response
 
 
 class LeaderboardTopView(APIView):
-    """GET /api/v1/leaderboard/top/ -- cached top-N for the dashboard widget."""
+    """GET /api/v1/leaderboard/top/ -- cached top-N for the dashboard widget.
 
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    Signed-in users only: it lists other students' names and avatars.  Because
+    anonymous callers are rejected before the handler runs, the shared cache entry
+    can only ever be served to authenticated users.
+    """
+
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
@@ -108,6 +120,8 @@ class LeaderboardTopView(APIView):
             cached = LeaderboardEntrySerializer(
                 lb.top_entries(limit=limit), many=True, context={"request": request}
             ).data
+            for index, row in enumerate(cached, start=1):
+                row["rank"] = index
             cache_set(cache_key, cached, _CACHE_TTL)
         return Response({"results": cached, "me": {"rank": lb.user_rank(request.user)}})
 

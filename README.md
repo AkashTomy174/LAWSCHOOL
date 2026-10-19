@@ -472,6 +472,12 @@ cd backend
 ..\.venv\Scripts\python.exe -m pytest --lf            # last failed only
 ```
 
+The suite always uses in-memory SQLite, whatever `DATABASE_URL` your `.env` sets.
+To run it against PostgreSQL (as CI does), set `TEST_DATABASE_URL` explicitly;
+pytest-django creates and drops a separate `test_<name>` database on that server.
+SQLite does not exercise PostgreSQL row locking or concurrency, so treat the
+PostgreSQL run as the authority for those.
+
 ```powershell
 # Frontend — 50 tests
 cd frontend

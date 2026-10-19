@@ -59,6 +59,10 @@ export default defineConfig(({ mode }) => ({
     setupFiles: ["./src/test/setup.js"],
     css: false,
     include: ["src/**/*.{test,spec}.{js,jsx}"],
+    // Each worker boots its own jsdom.  With the default (cores - 1) workers a cold
+    // start made workers miss Vitest's fixed 60s start handshake and 11 files
+    // silently never ran.  The tests themselves leak no timers or handles.
+    maxWorkers: 4,
     coverage: { reporter: ["text", "html"], include: ["src/**/*.{js,jsx}"] },
   },
 }));
