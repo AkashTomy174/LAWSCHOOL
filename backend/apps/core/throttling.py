@@ -17,7 +17,11 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from apps.core.cache import report_cache_failure
 
-FAIL_CLOSED_SCOPES = frozenset({"auth"})
+# whatsapp_link*: each allowed request sends a paid message, so losing the limiter
+# must stop the endpoint rather than remove the limit.
+FAIL_CLOSED_SCOPES = frozenset(
+    {"auth", "whatsapp_link", "whatsapp_link_ip", "video_upload"}
+)
 
 
 class ResilientScopedRateThrottle(ScopedRateThrottle):
@@ -33,3 +37,23 @@ class ResilientScopedRateThrottle(ScopedRateThrottle):
 
                 raise TemporarilyUnavailableError()
             return True
+
+
+class IpScopedRateThrottle(ResilientScopedRateThrottle):
+    """Same as the scoped throttle but always keyed by client IP, even when signed in.
+
+    Stock DRF keys authenticated requests by user id, so a farm of throwaway
+    accounts behind one address never trips a per-user limit.  Uses
+    ``NUM_PROXIES``-aware address resolution (never a raw header).  The view names
+    the scope in ``throttle_scope_ip`` so it can differ from the per-user scope.
+    """
+
+    scope_attr = "throttle_scope_ip"
+
+    def get_cache_key(self, request, view):
+        from apps.core.network import client_ip
+
+        return self.cache_format % {
+            "scope": f"{self.scope}:ip",
+            "ident": client_ip(request) or "unknown",
+        }

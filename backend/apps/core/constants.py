@@ -55,6 +55,7 @@ class PaymentProvider(models.TextChoices):
 class NotificationChannel(models.TextChoices):
     EMAIL = "email", "Email"
     IN_APP = "in_app", "In-app"
+    WHATSAPP = "whatsapp", "WhatsApp"
 
 
 class NotificationKind(models.TextChoices):

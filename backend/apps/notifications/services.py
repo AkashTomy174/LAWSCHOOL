@@ -30,7 +30,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
     },
     NotificationKind.PASSWORD_RESET: {
         "title": "Reset your LawSchool password",
-        "body": "We received a request to reset your password. Use this link within 24 hours: {reset_url}",
+        "body": "We received a request to reset your password. This link works once and expires in {reset_minutes} minutes: {reset_url}",
         "action_url": "/login",
     },
     NotificationKind.PAYMENT_SUCCESS: {
@@ -116,6 +116,7 @@ def notify_user(
     context: dict | None = None,
     channels: list[str] | None = None,
     send_email: bool = True,
+    whatsapp_key: str | None = None,
 ) -> list[Notification]:
     """Create in-app notification rows and queue email delivery.
 
@@ -145,7 +146,23 @@ def notify_user(
         if channel == NotificationChannel.EMAIL:
             _queue_email(notification)
 
+    if whatsapp_key:
+        _queue_whatsapp(user, kind, context, whatsapp_key)
+
     return created
+
+
+def _queue_whatsapp(user, kind: str, context: dict, key: str) -> None:
+    """WhatsApp leg.  ``key`` is the business event's identity (payment id,
+    attempt id...), which is what makes a redelivered webhook a no-op.  Callers
+    opt in by passing it, so account emails (password reset...) never go out on
+    WhatsApp.  Never raises: a messaging problem must not undo a payment."""
+    try:
+        from apps.notifications.whatsapp.events import notify_kind
+
+        notify_kind(user=user, kind=kind, context=context, key=key)
+    except Exception:
+        logger.exception("WhatsApp notification failed", extra={"kind": kind})
 
 
 def _queue_email(notification: Notification) -> None:

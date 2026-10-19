@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   Avatar,
@@ -131,7 +132,7 @@ export default function Profile() {
       });
       pushToast({
         message:
-          "Password changed. Please sign in again on your other devices.",
+          "Password changed. Please sign in again with your new password.",
         tone: "success",
       });
       // changePassword clears local tokens; re-resolve the session state.
@@ -150,7 +151,10 @@ export default function Profile() {
       <div className="flex flex-col gap-3 pb-10">
         <h1 className="d2">Your profile</h1>
         <p className="body max-w-[560px]">
-          Keep your details current so course notifications reach you.
+          Keep your details current so course notifications reach you.{" "}
+          <Link to="/settings/whatsapp" className="underline">
+            Manage WhatsApp notifications
+          </Link>
         </p>
       </div>
 

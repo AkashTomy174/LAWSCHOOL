@@ -19,6 +19,9 @@ from apps.core.constants import CourseStatus, LessonStatus, SubscriptionStatus
 
 User = get_user_model()
 
+# WhatsApp fixtures (wa_on, mock_post, consent_user, post_webhook...) live beside their tests.
+pytest_plugins = ["apps.notifications.tests.wa_support"]
+
 
 # --------------------------------------------------------------------------- #
 # Clients

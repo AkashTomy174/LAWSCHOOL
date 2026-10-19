@@ -43,6 +43,8 @@ REST_FRAMEWORK = {  # noqa: F405
         "payment": "1000/min",
         "playback": "1000/min",
         "progress": "1000/min",
-        "webhook": "1000/min",
+        "webhook_razorpay": "1000/min",
+        "webhook_whatsapp": "1000/min",
+        "video_upload": "1000/min",
     },
 }

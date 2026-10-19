@@ -37,6 +37,7 @@ def expire_subscriptions() -> int:
             notify_user(
                 user=subscription.user,
                 kind=NotificationKind.SUBSCRIPTION_EXPIRED,
+                whatsapp_key=f"subscription_expired:{subscription.pk}:{int(subscription.end_date.timestamp()) if subscription.end_date else 0}",
                 context={
                     "plan_name": subscription.plan.name,
                     "end_date": (
@@ -78,6 +79,7 @@ def send_expiry_reminders(days_before: int = 7) -> int:
             notify_user(
                 user=subscription.user,
                 kind=NotificationKind.SUBSCRIPTION_EXPIRING,
+                whatsapp_key=f"subscription_expiring:{subscription.pk}:{int(subscription.end_date.timestamp())}",
                 context={
                     "plan_name": subscription.plan.name,
                     "end_date": subscription.end_date.strftime("%d %b %Y"),

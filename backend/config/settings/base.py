@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from dotenv import load_dotenv
 import os
 
@@ -45,9 +46,48 @@ def env_list(key: str, default: list[str] | None = None) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Security
 # --------------------------------------------------------------------------- #
+# Substrings that mark a secret as a copied-from-the-docs placeholder.
+PLACEHOLDER_SECRET_MARKERS = (
+    "change-me",
+    "changeme",
+    "insecure",
+    "placeholder",
+    "your-secret",
+    "your_secret",
+    "secret-key-here",
+    "example",
+    "xxxx",
+    "build-only",
+)
+MIN_SECRET_LENGTH = 32
+
+
+def secret_problem(value: str | None) -> str | None:
+    """Why ``value`` is unfit to be a signing secret, or ``None`` if it is fine.
+
+    Never includes the value itself, so the message is safe to log or raise.
+    """
+    if value is None or not value.strip():
+        return "is empty or whitespace-only"
+    if value != value.strip():
+        return "has leading or trailing whitespace"
+    lowered = value.lower()
+    if any(marker in lowered for marker in PLACEHOLDER_SECRET_MARKERS):
+        return "looks like a placeholder"
+    if len(value) < MIN_SECRET_LENGTH:
+        return f"is shorter than {MIN_SECRET_LENGTH} characters"
+    return None
+
+
 SECRET_KEY = env("SECRET_KEY", "insecure-development-key-change-me")
 DEBUG = env_bool("DEBUG", False)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
+
+# Django admin login: temporary lockout after repeated failures (see
+# apps.core.middleware).  Per client IP and per submitted username.
+ADMIN_LOGIN_MAX_FAILURES_PER_IP = int(env("ADMIN_LOGIN_MAX_FAILURES_PER_IP", "5"))
+ADMIN_LOGIN_MAX_FAILURES_PER_USER = int(env("ADMIN_LOGIN_MAX_FAILURES_PER_USER", "10"))
+ADMIN_LOGIN_LOCKOUT_SECONDS = int(env("ADMIN_LOGIN_LOCKOUT_SECONDS", "900"))
 
 # Number of trusted reverse proxies in front of the app.  DRF throttling and audit
 # logging use it to pick the client address out of X-Forwarded-For; with 0 the
@@ -92,6 +132,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "apps.core.middleware.AdminLoginThrottleMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -144,6 +185,10 @@ AUTHENTICATION_BACKENDS = [
     "apps.users.backends.EmailBackend",
     "django.contrib.auth.backends.ModelBackend",
 ]
+
+# Password-reset links live one hour (single use: they die on any password change).
+# Email-verification links keep Django's PASSWORD_RESET_TIMEOUT default (3 days).
+PASSWORD_RESET_LINK_SECONDS = int(env("PASSWORD_RESET_LINK_SECONDS", "3600"))
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -215,7 +260,16 @@ REST_FRAMEWORK = {
         "payment": "30/min",
         "playback": "120/min",
         "progress": "120/min",
-        "webhook": "300/min",
+        # One scope per provider so one sender's burst cannot starve the other.
+        # The key is the (proxy-verified) client IP, never a request header.
+        "webhook_razorpay": "300/min",
+        "webhook_whatsapp": "300/min",
+        # Direct-upload URL minting: each URL is a billable Cloudflare asset slot.
+        "video_upload": "20/hour",
+        "whatsapp_link": "5/hour",
+        "whatsapp_link_ip": "20/hour",
+        "whatsapp_verify": "20/hour",
+        "whatsapp_admin": "60/min",
     },
 }
 
@@ -246,7 +300,9 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
-    "SIGNING_KEY": env("JWT_SECRET", SECRET_KEY),
+    # A *blank* JWT_SECRET (e.g. copied from .env.example) counts as unset, never as
+    # an empty key.  The fallback is the validated SECRET_KEY, not a literal.
+    "SIGNING_KEY": (env("JWT_SECRET") or "").strip() or SECRET_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
@@ -337,6 +393,28 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.core.tasks.recalculate_leaderboard_task",
         "schedule": 60 * 60 * 24,
     },
+    # ---- WhatsApp (all no-ops while WHATSAPP_ENABLED is false) ------------- #
+    "whatsapp-class-reminders-every-5-min": {
+        "task": "apps.notifications.tasks.dispatch_class_reminders",
+        "schedule": 60 * 5,
+    },
+    "whatsapp-sweep-pending-every-5-min": {
+        "task": "apps.notifications.tasks.sweep_pending_whatsapp",
+        "schedule": 60 * 5,
+    },
+    "whatsapp-weekly-summary": {
+        "task": "apps.notifications.tasks.send_weekly_summaries",
+        # Monday 09:00 in CELERY_TIMEZONE (Asia/Kolkata).
+        "schedule": crontab(hour=9, minute=0, day_of_week=1),
+    },
+    "whatsapp-inactivity-daily": {
+        "task": "apps.notifications.tasks.send_inactivity_reminders",
+        "schedule": crontab(hour=11, minute=0),
+    },
+    "whatsapp-cleanup-daily": {
+        "task": "apps.notifications.tasks.cleanup_whatsapp_records",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 # --------------------------------------------------------------------------- #
@@ -369,12 +447,51 @@ CLOUDFLARE_STREAM_CUSTOMER_CODE = env("CLOUDFLARE_STREAM_CUSTOMER_CODE", "")
 CLOUDFLARE_PLAYBACK_TOKEN_TTL = int(env("CLOUDFLARE_PLAYBACK_TOKEN_TTL", "300"))
 
 # --------------------------------------------------------------------------- #
+# WhatsApp Business Platform (Meta Cloud API).  Disabled unless explicitly turned
+# on; the LMS behaves exactly as before while WHATSAPP_ENABLED is false.
+# --------------------------------------------------------------------------- #
+WHATSAPP_ENABLED = env_bool("WHATSAPP_ENABLED", False)
+WHATSAPP_API_VERSION = env("WHATSAPP_API_VERSION", "v21.0")
+WHATSAPP_API_BASE_URL = env("WHATSAPP_API_BASE_URL", "https://graph.facebook.com")
+WHATSAPP_PHONE_NUMBER_ID = env("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_BUSINESS_ACCOUNT_ID = env("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
+WHATSAPP_ACCESS_TOKEN = env("WHATSAPP_ACCESS_TOKEN", "")
+WHATSAPP_APP_SECRET = env("WHATSAPP_APP_SECRET", "")
+WHATSAPP_VERIFY_TOKEN = env("WHATSAPP_VERIFY_TOKEN", "")
+WHATSAPP_DEFAULT_LANGUAGE = env("WHATSAPP_DEFAULT_LANGUAGE", "en")
+WHATSAPP_REQUEST_TIMEOUT = int(env("WHATSAPP_REQUEST_TIMEOUT", "10"))
+# Sends only go out for templates whose approval_status is "approved".  Turn this
+# on in a sandbox/test WABA where templates are not reviewed.
+WHATSAPP_ALLOW_UNAPPROVED_TEMPLATES = env_bool("WHATSAPP_ALLOW_UNAPPROVED_TEMPLATES", False)
+# Meta has no idempotency key for message submission.  After a read timeout we
+# cannot tell whether the message was accepted, so by default we do not resend.
+WHATSAPP_RETRY_AMBIGUOUS = env_bool("WHATSAPP_RETRY_AMBIGUOUS", False)
+WHATSAPP_MAX_ATTEMPTS = int(env("WHATSAPP_MAX_ATTEMPTS", "4"))
+# Platform-wide ceiling on verification codes per day (each is a paid message).
+WHATSAPP_OTP_DAILY_CAP = int(env("WHATSAPP_OTP_DAILY_CAP", "300"))
+WHATSAPP_SEND_RATE_PER_MINUTE = int(env("WHATSAPP_SEND_RATE_PER_MINUTE", "600"))
+WHATSAPP_MAX_BROADCAST_RECIPIENTS = int(env("WHATSAPP_MAX_BROADCAST_RECIPIENTS", "2000"))
+WHATSAPP_WEBHOOK_MAX_BYTES = int(env("WHATSAPP_WEBHOOK_MAX_BYTES", str(512 * 1024)))
+WHATSAPP_RETENTION_DAYS = int(env("WHATSAPP_RETENTION_DAYS", "90"))
+WHATSAPP_INBOUND_RETENTION_DAYS = int(env("WHATSAPP_INBOUND_RETENTION_DAYS", "30"))
+# Planning figure only (per delivered template message, INR).  Empty = unknown;
+# real charges come from Meta billing, never from this number.
+WHATSAPP_ESTIMATED_COST_PER_MESSAGE = env("WHATSAPP_ESTIMATED_COST_PER_MESSAGE", "")
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", "support@lawschool.local")
+
+# --------------------------------------------------------------------------- #
 # Domain tuning
 # --------------------------------------------------------------------------- #
 # How much clock skew we tolerate when validating Razorpay webhook timestamps.
 PAYMENT_WEBHOOK_TOLERANCE_SECONDS = int(env("PAYMENT_WEBHOOK_TOLERANCE_SECONDS", "300"))
+# Razorpay retries failed deliveries for about 24h, so the *age* limit on a signed
+# event timestamp must be generous.  Replays inside it are caught by the
+# content-addressed event id, not by the clock.
+PAYMENT_WEBHOOK_MAX_AGE_SECONDS = int(env("PAYMENT_WEBHOOK_MAX_AGE_SECONDS", str(3 * 86400)))
 # Progress updates may not jump further than this per submitted delta (anti-cheat).
 VIDEO_PROGRESS_MAX_DRIFT_SECONDS = int(env("VIDEO_PROGRESS_MAX_DRIFT_SECONDS", "30"))
+# Longest video Cloudflare will accept through a direct-upload URL (seconds).
+VIDEO_MAX_DURATION_SECONDS = int(env("VIDEO_MAX_DURATION_SECONDS", str(4 * 3600)))
 # Maximum upload size accepted for thumbnails / images (5 MB).
 MAX_IMAGE_UPLOAD_BYTES = int(env("MAX_IMAGE_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 

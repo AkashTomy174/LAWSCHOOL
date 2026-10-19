@@ -28,6 +28,32 @@ def check_media_storage(app_configs, **kwargs) -> list:
 
 
 @register("lawschool")
+def check_whatsapp_configuration(app_configs, **kwargs) -> list:
+    """Refuse to run with WhatsApp enabled but unconfigured (it is off by default)."""
+    from django.core.checks import Error
+
+    if not getattr(settings, "WHATSAPP_ENABLED", False):
+        return []
+    required = {
+        "WHATSAPP_PHONE_NUMBER_ID": settings.WHATSAPP_PHONE_NUMBER_ID,
+        "WHATSAPP_ACCESS_TOKEN": settings.WHATSAPP_ACCESS_TOKEN,
+        "WHATSAPP_APP_SECRET": settings.WHATSAPP_APP_SECRET,
+        "WHATSAPP_VERIFY_TOKEN": settings.WHATSAPP_VERIFY_TOKEN,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if not missing:
+        return []
+    return [
+        Error(
+            "WHATSAPP_ENABLED is true but required settings are empty: "
+            + ", ".join(missing),
+            hint="Set them in the environment, or set WHATSAPP_ENABLED=false.",
+            id="lawschool.E004",
+        )
+    ]
+
+
+@register("lawschool")
 def check_email_delivery(app_configs, **kwargs) -> list:
     """Warn when production cannot actually deliver email.
 
