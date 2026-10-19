@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { videoService } from "../services/videoService";
+import useHlsSource from "../hooks/useHlsSource";
 import { useVideoProgress } from "../hooks/useVideoProgress";
 import { formatDuration } from "../utils/format";
 import Icon from "./Icon";
@@ -21,10 +22,9 @@ import { Badge, Button, Spinner } from "./ui";
  *   supported mechanism (signed URLs) is used instead of inventing a scheme, as
  *   required.
  *
- * The player is a plain `<video>` element because the Cloudflare Stream HLS URL is
- * an HLS manifest; `hls.js` is intentionally not bundled and we fall back to the
- * browser's native HLS support (Safari/iOS) or the `/iframe` player which
- * Cloudflare serves for other browsers.
+ * The player is a plain `<video>` element. Cloudflare Stream serves an HLS
+ * manifest, which only Safari/iOS plays natively, so `useHlsSource` uses native
+ * playback where the browser reports it and lazy-loads hls.js everywhere else.
  */
 
 const TOKEN_REFRESH_LEEWAY_SECONDS = 45;
@@ -40,6 +40,18 @@ export default function VideoPlayer({
   const [error, setError] = useState(null);
   const refreshTimer = useRef(null);
   const videoRef = useRef(null);
+
+  useHlsSource(videoRef, status === "ready" ? playback?.hls_url : null, {
+    onError: (code) => {
+      if (code === "unsupported") {
+        setError({ code: "unsupported", message: "This browser cannot play this video." });
+        setStatus("error");
+      } else {
+        // Most often an expired token: mint a fresh one instead of retrying the same URL.
+        requestPlayback({ silent: true });
+      }
+    },
+  });
 
   const progress = useVideoProgress(videoUid, {
     initialPosition: resumeAt,
@@ -210,9 +222,6 @@ export default function VideoPlayer({
         }}
         aria-label={lessonTitle ? `Video: ${lessonTitle}` : "Lesson video"}
       >
-        {playback.hls_url && (
-          <source src={playback.hls_url} type="application/x-mpegURL" />
-        )}
         Your browser cannot play this video. Please update your browser or use a
         different device.
       </video>
