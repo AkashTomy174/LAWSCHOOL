@@ -101,3 +101,32 @@ def test_a_forged_signature_racing_a_valid_one_cannot_undo_the_capture(student, 
     assert payment.subscription_id == sub.pk
     assert sub.status == SubscriptionStatus.ACTIVE
     assert sub.end_date - sub.start_date == timedelta(days=plan.duration_days)
+
+
+@pytest.mark.parametrize("round_", range(10))
+def test_full_refund_racing_its_capture_never_leaves_access(student, plan, monkeypatch, round_):
+    """LS-01: refund (early, unlinked path) and capture webhooks processed at once."""
+    order, pay = f"order_race_3_{round_}", f"pay_race_3_{round_}"
+    make_payment(student, plan, order_id=order)
+    monkeypatch.setattr(services.gateway, "fetch_payment",
+                        lambda pid: {"id": pid, "order_id": order})
+    capture = {"payload": {"payment": {"entity": {
+        "id": pay, "order_id": order, "amount": plan.price_paise, "status": "captured"}}}}
+    refund = {"payload": {"refund": {"entity": {
+        "id": f"rfnd_{round_}", "payment_id": pay, "amount": plan.price_paise}}}}
+    jobs = iter([lambda: services.handle_payment_captured(capture),
+                 lambda: services.handle_payment_refunded(refund)])
+    lock = threading.Lock()
+
+    def work():
+        with lock:
+            job = next(jobs)
+        job()
+
+    assert _race(2, work) == []
+    payment = Payment.objects.get(provider_order_id=order)
+    assert payment.status == PaymentStatus.REFUNDED
+    assert payment.provider_payment_id == pay
+    assert not Subscription.objects.filter(
+        user=student, status=SubscriptionStatus.ACTIVE
+    ).exists()

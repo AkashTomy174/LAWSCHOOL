@@ -151,9 +151,10 @@ def test_refund_then_late_capture_ordering(api_client, student, plan):
     assert pay.status == PaymentStatus.REFUNDED and not Subscription.objects.exists()
 
 
-def _refund_body(pay, amount):
-    return json.dumps({"event": "refund.processed", "payload": {"refund": {"entity": {
-        "id": f"rfnd_{pay}", "payment_id": pay, "amount": amount}}}}).encode()
+def _refund_body(pay, amount, refund_id=None, **extra):
+    return json.dumps({"event": "refund.processed", **extra, "payload": {"refund": {
+        "entity": {"id": refund_id or f"rfnd_{pay}", "payment_id": pay,
+                   "amount": amount}}}}).encode()
 
 
 def test_refund_before_capture_is_not_lost(api_client, student, plan, monkeypatch):
@@ -171,6 +172,35 @@ def test_refund_before_capture_is_not_lost(api_client, student, plan, monkeypatc
     assert r.status_code == 200
     pay.refresh_from_db()
     assert pay.status == PaymentStatus.REFUNDED and not Subscription.objects.exists()
+
+
+def test_partial_refunds_before_capture_add_up_once(api_client, student, plan, monkeypatch):
+    """Partial refund lands early, capture follows, a redelivery is not double-counted."""
+    pay = make_payment(student, plan, order_id="o15")
+    monkeypatch.setattr(services.gateway, "fetch_payment",
+                        lambda pid: {"id": pid, "order_id": "o15"})
+    half, now = plan.price_paise // 2, int(time.time())
+
+    r = _post(api_client, _refund_body("p15", half, "rfnd_a", created_at=now))
+    assert r.data["result"]["partial_refund"]
+    # A partial refund leaves the purchase valid: the capture still activates it.
+    _post(api_client, _body("o15", "p15", plan, created_at=now))
+    pay.refresh_from_db()
+    assert pay.status == PaymentStatus.CAPTURED
+    assert Subscription.objects.get(user=student).status == "active"
+
+    # Same refund re-sent in a different body (not a byte-identical duplicate).
+    r = _post(api_client, _refund_body("p15", half, "rfnd_a", created_at=now + 1))
+    assert r.data["result"]["partial_refund"]
+    pay.refresh_from_db()
+    assert pay.status == PaymentStatus.CAPTURED
+
+    # The second, distinct refund completes the amount and ends access.
+    r = _post(api_client, _refund_body("p15", plan.price_paise - half, "rfnd_b"))
+    assert r.data["result"]["refunded"]
+    pay.refresh_from_db()
+    assert pay.status == PaymentStatus.REFUNDED
+    assert Subscription.objects.get(user=student).status == "cancelled"
 
 
 def test_refund_for_foreign_order_is_acknowledged(api_client, plan, monkeypatch):

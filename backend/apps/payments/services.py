@@ -673,6 +673,9 @@ def handle_payment_refunded(payload: dict) -> dict:
         # id; ask the gateway.  A gateway error raises -> non-2xx -> Razorpay retries.
         order_id = gateway.fetch_payment(payment_id).get("order_id")
         if not order_id:
+            logger.warning(
+                "Refund for a payment with no order", extra={"payment_id": payment_id}
+            )
             return {"matched": False}
 
     with transaction.atomic():
@@ -686,6 +689,12 @@ def handle_payment_refunded(payload: dict) -> dict:
         else:
             payment = locked.filter(provider_payment_id=payment_id).first()
         if payment is None:
+            # Not one of our orders (e.g. another app on the same Razorpay account).
+            # The signed event stays in WebhookEvent for audit.
+            logger.warning(
+                "Refund for unknown payment",
+                extra={"payment_id": payment_id, "order_id": order_id},
+            )
             return {"matched": False}
         if payment.status == PaymentStatus.REFUNDED:
             return {"matched": True, "already_refunded": True}
