@@ -7,6 +7,7 @@ services layer -- never by the SPA.
 
 from __future__ import annotations
 
+from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -66,6 +67,9 @@ class RegisterView(generics.CreateAPIView):
         # emails have accounts.  A new address gets its account + verification
         # email; an existing one gets a password-reset email to its real owner.
         if User.objects.filter(email=data["email"]).exists():
+            # Pay the same password-hashing cost as a real sign-up, so response
+            # time does not reveal that the address is taken.
+            make_password(data["password"])
             services.request_password_reset(data["email"])
         else:
             try:

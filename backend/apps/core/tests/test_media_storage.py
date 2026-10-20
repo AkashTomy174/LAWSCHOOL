@@ -1,4 +1,4 @@
-"""Production media storage: object storage when configured, a loud warning when not.
+"""Production media storage: object storage when configured, a deploy-blocking check error when not.
 
 Uploads (avatars, course thumbnails) used to land on the container disk, which
 is wiped on every deploy, and with DEBUG off Django never served /media/ at all.
@@ -50,10 +50,10 @@ _INSPECT = (
 )
 
 
-def test_without_a_bucket_production_warns():
+def test_without_a_bucket_production_check_fails():
     out = _production({}, _INSPECT)
     assert out["storage"]["BACKEND"].endswith("FileSystemStorage")
-    assert out["warnings"] == ["lawschool.W003"]
+    assert out["warnings"] == ["lawschool.E005"]
 
 
 def test_with_a_bucket_uploads_go_to_private_object_storage():
@@ -66,4 +66,10 @@ def test_with_a_bucket_uploads_go_to_private_object_storage():
     assert options["querystring_auth"] is True       # signed, expiring URLs
     assert options["default_acl"] is None             # bucket stays private
     assert options["file_overwrite"] is False         # no clobbering by name
+    assert out["warnings"] == []
+
+
+def test_persistent_volume_deployments_can_opt_out():
+    """docker-compose.prod.yml serves MEDIA_ROOT from a volume via nginx."""
+    out = _production({"PERSISTENT_MEDIA_REQUIRED": "False"}, _INSPECT)
     assert out["warnings"] == []

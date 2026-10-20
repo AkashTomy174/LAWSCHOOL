@@ -41,7 +41,7 @@ rejected by `ALLOWED_HOSTS` and redirected by `SECURE_SSL_REDIRECT`.
 | G2 | Cloudflare sync crashed on real payload *(new)* | Yes, reproduced | High | `status` is an object; used as a dict key | Read `status.state` / `errorReasonText` | same file | Fixed `b59eb39` |
 | H | `.vscode/settings.json` API key could be committed | Yes | Critical (latent) | `.gitignore` re-included the file | Stop re-including it | `git check-ignore` | Fixed `a95bda6`; key never in history, no rotation needed |
 | I | No Celery worker or Beat | Yes (Railway) | High | Services never created | Schedule-to-registry tests; worker verified locally; service definitions in F.3 | `test_celery_config.py` (4) + local worker run | Manual step |
-| J | Uploads on ephemeral disk | Yes, worse: never served either | High | Filesystem storage; `/media/` served only with DEBUG | Optional S3-compatible storage; image installs `production.txt`; W003 check | `test_media_storage.py` (2) + S3 mock upload | Partially fixed `03cf9b1`, needs a bucket |
+| J | Uploads on ephemeral disk | Yes, worse: never served either | High | Filesystem storage; `/media/` served only with DEBUG | Optional S3-compatible storage; image installs `production.txt`; E005 check (blocks deploy) | `test_media_storage.py` (2) + S3 mock upload | Partially fixed `03cf9b1`, needs a bucket |
 | K | Redis outage = full outage | Yes, reproduced | High | Every cache call raised | Per-use policy (table in E); 1s socket timeouts | `test_cache_outage.py` (11) + unreachable-Redis timing | Fixed `77df486` |
 | L | Admin subscription table empty | Yes, reproduced in browser | High | Client unwrapped the paginated envelope; pages read `.results` | Return the envelope; dashboard counts `?status=active`; empty state | `test_admin_subscription_list.py` (5), `AdminSubscriptions.test.jsx` (4), service test | Fixed `d83df5a` |
 | M-A | JWT tokens in localStorage | Yes (by design) | Medium | Architecture | Not changed: separate project (G) | — | Documented |
@@ -138,7 +138,7 @@ Backend service `lawschool-backend` (Dockerfile build):
 
 | Setting | Value |
 |---|---|
-| Pre-deploy command | `python manage.py migrate --noinput` (runs once per deploy, not per worker; also prints the W001–W003 warnings) |
+| Pre-deploy command | `python manage.py migrate --noinput` (runs once per deploy, not per worker; also prints the W001/W002 warnings and fails on E005 when no bucket is set) |
 | Healthcheck path | `/health/ready/` |
 | Variables to add | `CLOUDFLARE_STREAM_KEY_ID` (**blocker**), email provider (`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`), bucket (`AWS_STORAGE_BUCKET_NAME`, `AWS_S3_ENDPOINT_URL`, `AWS_S3_REGION_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) |
 | Variables to check | `CELERY_TASK_ALWAYS_EAGER` = `False` once the worker exists; `CACHE_BACKEND` unset (defaults to `redis`); `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` include the Vercel domain; `FRONTEND_URL` is the Vercel URL |

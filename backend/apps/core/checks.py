@@ -10,18 +10,24 @@ _NON_DELIVERING = ("console", "locmem", "dummy", "filebased")
 
 @register("lawschool")
 def check_media_storage(app_configs, **kwargs) -> list:
-    """Warn when production keeps uploads on the container filesystem."""
+    """Refuse production uploads on the container filesystem (wiped every deploy).
+
+    An Error, not a Warning: it fails ``check`` and the pre-deploy ``migrate``,
+    so a deploy without a bucket stops instead of silently losing uploads.
+    """
+    from django.core.checks import Error
+
     if not getattr(settings, "PERSISTENT_MEDIA_REQUIRED", False):
         return []
     if settings.STORAGES["default"]["BACKEND"].endswith("FileSystemStorage"):
         return [
-            Warning(
+            Error(
                 "Uploaded media is stored on the container filesystem.",
                 hint="Set AWS_STORAGE_BUCKET_NAME, AWS_S3_ENDPOINT_URL, "
                 "AWS_S3_REGION_NAME, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
                 "for S3-compatible storage. Until then uploads are lost on every "
                 "deploy and /media/ is not served (DEBUG is off).",
-                id="lawschool.W003",
+                id="lawschool.E005",
             )
         ]
     return []

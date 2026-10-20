@@ -113,8 +113,10 @@ EMAIL_DELIVERY_REQUIRED = True
 # storage (a Railway Bucket, Cloudflare R2, AWS S3...).  The bucket stays
 # private: every media URL is a short-lived signed link on the bucket's own
 # domain, so an uploaded file never executes on the app's origin.
-# apps.core.checks warns while this is not configured.
-PERSISTENT_MEDIA_REQUIRED = True
+# apps.core.checks fails (lawschool.E005) while this is not configured.  Set
+# PERSISTENT_MEDIA_REQUIRED=False only when MEDIA_ROOT is a persistent volume
+# served by a web server (docker-compose.prod.yml).
+PERSISTENT_MEDIA_REQUIRED = env_bool("PERSISTENT_MEDIA_REQUIRED", True)
 if env("AWS_STORAGE_BUCKET_NAME"):
     STORAGES = {  # noqa: F405
         **STORAGES,  # noqa: F405

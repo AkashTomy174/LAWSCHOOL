@@ -78,6 +78,22 @@ class TestRegistration:
         student.refresh_from_db()
         assert not student.check_password("StrongPass123!")  # nothing was overwritten
 
+    def test_register_existing_email_pays_the_hashing_cost(
+        self, api_client, student, monkeypatch
+    ):
+        """LS-04: skipping the hash would make taken emails measurably faster."""
+        from apps.users import views
+
+        calls = []
+        monkeypatch.setattr(views, "make_password", lambda pw: calls.append(pw))
+        api_client.post(
+            REGISTER_URL,
+            {"email": student.email, "name": "Duplicate",
+             "password": "StrongPass123!", "password_confirm": "StrongPass123!"},
+            format="json",
+        )
+        assert calls == ["StrongPass123!"]
+
     def test_register_rejects_mismatched_passwords(self, api_client):
         response = api_client.post(
             REGISTER_URL,

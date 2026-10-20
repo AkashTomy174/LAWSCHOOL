@@ -43,6 +43,8 @@ services:
       # (Local dev and tests use a fast hasher for speed.)
       LOG_JSON: "True"
       CELERY_TASK_ALWAYS_EAGER: "False"
+      # Media lives on the persistent media_data volume, served by nginx.
+      PERSISTENT_MEDIA_REQUIRED: "False"
     volumes: !override
       # No source bind-mount; the image is immutable.  Media only.
       - media_data:/app/media

@@ -663,13 +663,28 @@ def handle_payment_refunded(payload: dict) -> dict:
     if not payment_id:
         return {"matched": False}
 
+    locked = Payment.objects.select_for_update(of=("self",)).select_related(
+        "user", "plan", "subscription"
+    )
+    order_id = None
+    if not Payment.objects.filter(provider_payment_id=payment_id).exists():
+        # The refund beat the capture (webhooks arrive out of order), so our row
+        # does not know this payment id yet.  The refund entity carries no order
+        # id; ask the gateway.  A gateway error raises -> non-2xx -> Razorpay retries.
+        order_id = gateway.fetch_payment(payment_id).get("order_id")
+        if not order_id:
+            return {"matched": False}
+
     with transaction.atomic():
-        payment = (
-            Payment.objects.select_for_update(of=("self",))
-            .select_related("user", "plan", "subscription")
-            .filter(provider_payment_id=payment_id)
-            .first()
-        )
+        if order_id:
+            payment = locked.filter(provider_order_id=order_id).first()
+            if payment is not None and payment.provider_payment_id != payment_id:
+                # Link the refunded attempt (an earlier failed attempt on the same
+                # order may be recorded); a later capture then sees REFUNDED.
+                payment.provider_payment_id = payment_id
+                payment.save(update_fields=["provider_payment_id", "updated_at"])
+        else:
+            payment = locked.filter(provider_payment_id=payment_id).first()
         if payment is None:
             return {"matched": False}
         if payment.status == PaymentStatus.REFUNDED:

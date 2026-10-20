@@ -151,6 +151,35 @@ def test_refund_then_late_capture_ordering(api_client, student, plan):
     assert pay.status == PaymentStatus.REFUNDED and not Subscription.objects.exists()
 
 
+def _refund_body(pay, amount):
+    return json.dumps({"event": "refund.processed", "payload": {"refund": {"entity": {
+        "id": f"rfnd_{pay}", "payment_id": pay, "amount": amount}}}}).encode()
+
+
+def test_refund_before_capture_is_not_lost(api_client, student, plan, monkeypatch):
+    """LS-01: the refund arrives while our row still lacks the payment id."""
+    pay = make_payment(student, plan, order_id="o13")  # CREATED, no provider_payment_id
+    monkeypatch.setattr(services.gateway, "fetch_payment",
+                        lambda pid: {"id": pid, "order_id": "o13"})
+    r = _post(api_client, _refund_body("p13", plan.price_paise))
+    assert r.status_code == 200 and r.data["result"]["refunded"]
+    pay.refresh_from_db()
+    assert pay.status == PaymentStatus.REFUNDED and pay.provider_payment_id == "p13"
+
+    # The delayed capture now lands and must not grant access.
+    r = _post(api_client, _body("o13", "p13", plan, created_at=int(time.time())))
+    assert r.status_code == 200
+    pay.refresh_from_db()
+    assert pay.status == PaymentStatus.REFUNDED and not Subscription.objects.exists()
+
+
+def test_refund_for_foreign_order_is_acknowledged(api_client, plan, monkeypatch):
+    monkeypatch.setattr(services.gateway, "fetch_payment",
+                        lambda pid: {"id": pid, "order_id": "order_not_ours"})
+    r = _post(api_client, _refund_body("p14", plan.price_paise))
+    assert r.status_code == 200 and r.data["result"] == {"matched": False}
+
+
 def test_providers_use_independent_throttle_scopes():
     from apps.notifications.views_whatsapp import WebhookView
     from apps.payments.views import PaymentWebhookView
