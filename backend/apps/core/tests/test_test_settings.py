@@ -30,7 +30,7 @@ def _test_settings(**env_overrides) -> str:
 def test_database_url_does_not_redirect_the_suite():
     out = _test_settings(
         DATABASE_URL="postgres://dev:dev@localhost:5432/lawschool",
-        RAZORPAY_KEY_SECRET="real-looking-secret",
+        RAZORPAY_KEY_SECRET="from-dev-env",
         DEBUG="False",  # as in CI, where no collectstatic has run
     )
     assert out == "django.db.backends.sqlite3|:memory:|rzp-sec-test|StaticFilesStorage"

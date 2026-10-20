@@ -16,7 +16,7 @@ import pytest
 
 from apps.core.constants import PaymentStatus
 from apps.payments import services
-from apps.payments.models import WebhookEvent
+from apps.payments.models import Payment, WebhookEvent
 from apps.payments.tests.test_payments import (
     WEBHOOK_URL,
     make_payment,
@@ -201,6 +201,31 @@ def test_partial_refunds_before_capture_add_up_once(api_client, student, plan, m
     pay.refresh_from_db()
     assert pay.status == PaymentStatus.REFUNDED
     assert Subscription.objects.get(user=student).status == "cancelled"
+
+
+@pytest.mark.parametrize("refunded", ["first", "second"])
+def test_refund_cannot_revoke_a_separately_paid_term(api_client, student, plan, refunded):
+    """Two paid terms stack on one subscription; refunding one keeps the other."""
+    from datetime import timedelta
+
+    make_payment(student, plan, order_id="o16a")
+    make_payment(student, plan, order_id="o16b")
+    _post(api_client, _body("o16a", "p16a", plan))
+    _post(api_client, _body("o16b", "p16b", plan))
+    sub = Subscription.objects.get(user=student)
+    term = timedelta(days=plan.duration_days)
+    assert sub.end_date - sub.start_date == 2 * term
+    paid_until = sub.end_date
+
+    pay = "p16a" if refunded == "first" else "p16b"
+    r = _post(api_client, _refund_body(pay, plan.price_paise))
+    assert r.data["result"]["refunded"]
+
+    sub.refresh_from_db()
+    assert sub.status == "active"                  # the other term is still paid for
+    assert sub.end_date == paid_until - term       # exactly one term removed
+    other = "o16b" if refunded == "first" else "o16a"
+    assert Payment.objects.get(provider_order_id=other).status == PaymentStatus.CAPTURED
 
 
 def test_refund_for_foreign_order_is_acknowledged(api_client, plan, monkeypatch):
